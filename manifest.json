@@ -15,7 +15,8 @@
     "accountsFolders",
     "messagesRead",
     "messagesMove",
-    "messagesDelete"
+    "messagesDelete",
+    "messagesImport"
   ],
   "icons": {
     "64": "icons/icon.svg",

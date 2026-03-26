@@ -4,7 +4,10 @@
 // ─── State ────────────────────────────────────────────────────────────────────
 let isProcessing = false;
 let shouldCancel = false;
-let currentProgress = null; // { phase, folder, copied, total, overallDone, overallTotal, log }
+let currentProgress = null;
+
+// Track which folder IDs have already been processed (to avoid duplicates)
+let processedFolderIds = new Set();
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -24,8 +27,6 @@ messenger.runtime.onMessage.addListener(async (message, _sender) => {
       return handleGetFolders(message.accountId);
 
     case "start-move":
-      // message.sourceFolders = [ { id, path, accountId } , … ]
-      // message.destination   = { id, accountId }  (MailFolderId or root account)
       return handleStartMove(message.sourceFolders, message.destination);
 
     case "cancel":
@@ -62,7 +63,6 @@ async function handleGetFolders(accountId) {
     const account = await messenger.accounts.get(accountId, true);
     if (!account) return { ok: false, error: "Account not found" };
 
-    // Flatten the folder tree
     const flatFolders = [];
     const walk = (folders, depth) => {
       for (const f of folders) {
@@ -93,6 +93,7 @@ async function handleStartMove(sourceFolders, destination) {
 
   isProcessing = true;
   shouldCancel = false;
+  processedFolderIds = new Set();
   currentProgress = {
     phase: "starting",
     folder: "",
@@ -118,7 +119,7 @@ async function processQueue(sourceFolders, destination) {
     messenger.runtime.sendMessage({
       type: "progress-update",
       progress: { ...currentProgress },
-    });
+    }).catch(() => {}); // UI tab might be closed
   };
 
   try {
@@ -129,11 +130,36 @@ async function processQueue(sourceFolders, destination) {
       }
 
       const src = sourceFolders[i];
+
+      // Skip if this folder was already processed as a sub-folder of a parent
+      if (processedFolderIds.has(src.id)) {
+        log(`⏭️ Skipping ${src.path} — already processed as a sub-folder.`);
+        currentProgress.overallDone = i + 1;
+        broadcast();
+        continue;
+      }
+
+      // Check the folder still exists before processing
+      try {
+        await messenger.folders.get(src.id, false);
+      } catch (_e) {
+        log(`⏭️ Skipping ${src.path} — folder no longer exists (already moved).`);
+        currentProgress.overallDone = i + 1;
+        broadcast();
+        continue;
+      }
+
       currentProgress.overallDone = i;
       currentProgress.phase = "processing";
       currentProgress.folder = src.path;
       log(`📂 Processing folder: ${src.path}`);
       broadcast();
+
+      // Cooldown between folders to let IMAP connections stabilise
+      if (i > 0) {
+        log(`   ⏳ Waiting 3s for server connections to stabilise…`);
+        await sleep(3000);
+      }
 
       try {
         await processSingleFolder(src, destination, log, broadcast);
@@ -156,6 +182,8 @@ async function processQueue(sourceFolders, destination) {
 }
 
 async function processSingleFolder(src, destination, log, broadcast) {
+  processedFolderIds.add(src.id);
+
   // 1. Create the folder in the destination
   let destFolder;
   const srcFolder = await messenger.folders.get(src.id, false);
@@ -192,46 +220,75 @@ async function processSingleFolder(src, destination, log, broadcast) {
   let skippedMessages = 0;
   currentProgress.total = totalMessages;
   currentProgress.copied = 0;
-  log(`   📧 Found ${totalMessages} message(s) to copy`);
+  log(`   📧 Found ${totalMessages} message(s) to process`);
   broadcast();
 
-  // 3. Copy and delete in small batches with retry + per-message fallback
+  // 3. Copy and delete in small batches with retry + getRaw/import fallback
   const BATCH_SIZE = 10;
   const MAX_RETRIES = 3;
 
   for (let i = 0; i < allMessageIds.length; i += BATCH_SIZE) {
     if (shouldCancel) return;
     const batch = allMessageIds.slice(i, i + BATCH_SIZE);
-    let copied = false;
+    let batchCopied = false;
 
-    // Try the batch as a whole, with retries
-    for (let attempt = 1; attempt <= MAX_RETRIES && !copied; attempt++) {
+    // Attempt A: batch copy via messenger.messages.copy
+    for (let attempt = 1; attempt <= MAX_RETRIES && !batchCopied; attempt++) {
       try {
         await messenger.messages.copy(batch, destFolder.id);
-        copied = true;
+        batchCopied = true;
       } catch (err) {
         log(`   ⚠️ Batch copy attempt ${attempt}/${MAX_RETRIES} failed (${batch.length} msgs): ${err.message}`);
         if (attempt < MAX_RETRIES) {
-          await sleep(1000 * attempt); // backoff
+          await sleep(2000 * attempt);
         }
       }
     }
 
-    if (!copied) {
-      // Fallback: copy one message at a time so one bad message doesn't block everything
-      log(`   🔄 Falling back to per-message copy for this batch…`);
-      for (const msgId of batch) {
-        if (shouldCancel) return;
-        try {
-          await messenger.messages.copy([msgId], destFolder.id);
-        } catch (err) {
-          skippedMessages++;
-          log(`   ❌ Skipped message ${msgId}: ${err.message}`);
-          continue; // skip delete for this message too
+    if (batchCopied) {
+      // Batch copy succeeded — now delete originals
+      try {
+        await messenger.messages.delete(batch, { deletePermanently: true });
+      } catch (delErr) {
+        log(`   ⚠️ Batch delete failed, trying individually: ${delErr.message}`);
+        for (const msgId of batch) {
+          try { await messenger.messages.delete([msgId], { deletePermanently: true }); } catch (_e) { /* best effort */ }
         }
-        // Delete only the successfully copied message
+      }
+      copiedMessages += batch.length;
+      currentProgress.copied = copiedMessages;
+      log(`   📋 Copied ${copiedMessages}/${totalMessages} message(s)`);
+      broadcast();
+      continue;
+    }
+
+    // Attempt B: per-message using getRaw + import as ultimate fallback
+    log(`   🔄 Falling back to per-message transfer…`);
+    for (const msgId of batch) {
+      if (shouldCancel) return;
+      let msgCopied = false;
+
+      // B1: Try single-message copy first
+      try {
+        await messenger.messages.copy([msgId], destFolder.id);
+        msgCopied = true;
+      } catch (_e) {
+        // B2: Fall back to getRaw + import
         try {
-          await messenger.messages.delete([msgId], true);
+          const rawFile = await messenger.messages.getRaw(msgId, { data_format: "File" });
+          await messenger.messages.import(rawFile, destFolder.id);
+          msgCopied = true;
+          log(`   📨 Message ${msgId} imported via raw fallback`);
+        } catch (importErr) {
+          skippedMessages++;
+          log(`   ❌ Skipped message ${msgId}: ${importErr.message}`);
+          continue;
+        }
+      }
+
+      if (msgCopied) {
+        try {
+          await messenger.messages.delete([msgId], { deletePermanently: true });
         } catch (delErr) {
           log(`   ⚠️ Could not delete source message ${msgId}: ${delErr.message}`);
         }
@@ -239,23 +296,10 @@ async function processSingleFolder(src, destination, log, broadcast) {
         currentProgress.copied = copiedMessages;
         broadcast();
       }
-      continue; // skip the bulk delete below
-    }
 
-    // Bulk delete the batch after successful copy
-    try {
-      await messenger.messages.delete(batch, true);
-    } catch (delErr) {
-      log(`   ⚠️ Batch delete failed, trying individually: ${delErr.message}`);
-      for (const msgId of batch) {
-        try { await messenger.messages.delete([msgId], true); } catch (_e) { /* best effort */ }
-      }
+      // Small delay between individual messages to avoid hammering the server
+      await sleep(200);
     }
-
-    copiedMessages += batch.length;
-    currentProgress.copied = copiedMessages;
-    log(`   📋 Copied ${copiedMessages}/${totalMessages} message(s)`);
-    broadcast();
   }
 
   if (skippedMessages > 0) {
@@ -277,11 +321,15 @@ async function processSingleFolder(src, destination, log, broadcast) {
     }
   }
 
-  // 5. Delete the now-empty source folder
-  try {
-    await messenger.folders.delete(src.id);
-    log(`   🗑️ Removed source folder: ${folderName}`);
-  } catch (err) {
-    log(`   ⚠️ Could not remove source folder: ${err.message}`);
+  // 5. Delete the now-empty source folder (only if no messages were skipped)
+  if (skippedMessages === 0) {
+    try {
+      await messenger.folders.delete(src.id);
+      log(`   🗑️ Removed source folder: ${folderName}`);
+    } catch (err) {
+      log(`   ⚠️ Could not remove source folder: ${err.message}`);
+    }
+  } else {
+    log(`   ⚠️ Source folder "${folderName}" kept — it still has ${skippedMessages} message(s) that couldn't be moved.`);
   }
 }
