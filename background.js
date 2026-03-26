@@ -184,20 +184,29 @@ async function processQueue(sourceFolders, destination) {
 async function processSingleFolder(src, destination, log, broadcast) {
   processedFolderIds.add(src.id);
 
+  // Resolve whether the destination is an account root or a folder
+  const isAccountRoot = typeof destination.id === "string" && destination.id.startsWith("account:");
+  const destRef = isAccountRoot ? destination.id.replace("account:", "") : destination.id;
+
   // 1. Create the folder in the destination
   let destFolder;
   const srcFolder = await messenger.folders.get(src.id, false);
   const folderName = srcFolder.name;
 
   try {
-    destFolder = await messenger.folders.create(destination.id, folderName);
+    destFolder = await messenger.folders.create(destRef, folderName);
     log(`   📁 Created destination folder: ${folderName}`);
   } catch (err) {
     // Folder may already exist — try to find it
-    const destParent = await messenger.folders.get(destination.id, true);
-    const existing = (destParent.subFolders || []).find(
-      (f) => f.name === folderName
-    );
+    let existingSubs;
+    if (isAccountRoot) {
+      const acct = await messenger.accounts.get(destRef, true);
+      existingSubs = acct ? acct.folders : [];
+    } else {
+      const destParent = await messenger.folders.get(destRef, true);
+      existingSubs = destParent.subFolders || [];
+    }
+    const existing = existingSubs.find((f) => f.name === folderName);
     if (existing) {
       destFolder = existing;
       log(`   📁 Destination folder already exists: ${folderName}`);
@@ -323,11 +332,21 @@ async function processSingleFolder(src, destination, log, broadcast) {
 
   // 5. Delete the now-empty source folder (only if no messages were skipped)
   if (skippedMessages === 0) {
-    try {
-      await messenger.folders.delete(src.id);
-      log(`   🗑️ Removed source folder: ${folderName}`);
-    } catch (err) {
-      log(`   ⚠️ Could not remove source folder: ${err.message}`);
+    let deleted = false;
+    for (let attempt = 1; attempt <= 3 && !deleted; attempt++) {
+      try {
+        await sleep(2000); // give IMAP server time to expunge
+        await messenger.folders.delete(src.id);
+        log(`   🗑️ Removed source folder: ${folderName}`);
+        deleted = true;
+      } catch (err) {
+        if (attempt < 3) {
+          log(`   ⏳ Folder delete attempt ${attempt}/3 failed, retrying…`);
+        } else {
+          log(`   ⚠️ Could not remove source folder after 3 attempts: ${err.message}`);
+          log(`   ℹ️ The folder is empty — you can delete it manually.`);
+        }
+      }
     }
   } else {
     log(`   ⚠️ Source folder "${folderName}" kept — it still has ${skippedMessages} message(s) that couldn't be moved.`);

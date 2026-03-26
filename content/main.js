@@ -68,10 +68,24 @@ async function loadFolderTree(accountId, side) {
   const res = await messenger.runtime.sendMessage({ type: "get-folders", accountId });
   if (!res.ok) { container.innerHTML = `<div class="empty-state">Error: ${res.error}</div>`; return; }
 
-  if (side === "source") sourceFolders = res.folders;
-  else destFolders = res.folders;
+  if (side === "source") {
+    sourceFolders = res.folders;
+  } else {
+    // Prepend a virtual "Account Root" entry so the user can move folders
+    // to the top level of the account (the parent of Inbox, Sent, etc.)
+    const acct = accounts.find((a) => a.id === accountId);
+    const rootEntry = {
+      id: `account:${accountId}`,
+      name: `📫 ${acct ? acct.name : "Account"} (Root)`,
+      path: "/",
+      type: "root",
+      accountId,
+      depth: 0,
+    };
+    destFolders = [rootEntry, ...res.folders];
+  }
 
-  renderTree(res.folders, container, side);
+  renderTree(side === "source" ? sourceFolders : destFolders, container, side);
 }
 
 function folderIcon(type) {
