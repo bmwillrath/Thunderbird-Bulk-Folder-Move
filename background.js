@@ -106,23 +106,39 @@ async function processQueue(sourceFolders, destination) {
     }).catch(() => {});
   };
 
+  // Migration-wide stats
+  const stats = {
+    foldersProcessed: 0,
+    foldersSkipped: 0,
+    foldersFailed: 0,
+    foldersDeleted: 0,
+    foldersKept: 0,
+    messagesCopied: 0,
+    messagesDuplicatesRemoved: 0,
+    messagesFailed: 0,
+    nativeMoves: 0,
+  };
+
+  // Store stats on currentProgress so processSingleFolder can update them
+  currentProgress.stats = stats;
+
   try {
     for (let i = 0; i < sourceFolders.length; i++) {
       if (shouldCancel) { log("⚠️ Cancelled by user."); break; }
 
       const src = sourceFolders[i];
 
-      // Skip already-processed sub-folders
       if (processedFolderIds.has(src.id)) {
         log(`⏭️ Skipping ${src.path} — already processed as a sub-folder.`);
+        stats.foldersSkipped++;
         currentProgress.overallDone = i + 1;
         broadcast();
         continue;
       }
 
-      // Check folder still exists
       try { await messenger.folders.get(src.id, false); } catch (_e) {
         log(`⏭️ Skipping ${src.path} — folder no longer exists.`);
+        stats.foldersSkipped++;
         currentProgress.overallDone = i + 1;
         broadcast();
         continue;
@@ -140,9 +156,39 @@ async function processQueue(sourceFolders, destination) {
         await processSingleFolder(src, destination, log, broadcast);
         log(`✅ Finished: ${src.path}`);
       } catch (err) {
+        stats.foldersFailed++;
         log(`❌ Error processing ${src.path}: ${err.message}`);
       }
     }
+
+    // ── Completion Summary ────────────────────────────────────────────────
+    log(``);
+    log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+    if (shouldCancel) {
+      log(`⚠️  MIGRATION CANCELLED`);
+    } else if (stats.messagesFailed > 0 || stats.foldersFailed > 0) {
+      log(`⚠️  MIGRATION COMPLETED WITH ISSUES`);
+    } else {
+      log(`✅  MIGRATION COMPLETED SUCCESSFULLY`);
+    }
+    log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+    log(`   Folders processed:       ${stats.foldersProcessed}`);
+    if (stats.nativeMoves > 0)
+      log(`   ├─ Native moves:         ${stats.nativeMoves}`);
+    log(`   ├─ Deleted from source:  ${stats.foldersDeleted}`);
+    if (stats.foldersKept > 0)
+      log(`   ├─ Kept (have errors):   ${stats.foldersKept}`);
+    if (stats.foldersSkipped > 0)
+      log(`   ├─ Skipped (duplicates): ${stats.foldersSkipped}`);
+    if (stats.foldersFailed > 0)
+      log(`   └─ Failed:               ${stats.foldersFailed}`);
+    log(``);
+    log(`   Messages copied:         ${stats.messagesCopied}`);
+    if (stats.messagesDuplicatesRemoved > 0)
+      log(`   ├─ Duplicates cleaned:   ${stats.messagesDuplicatesRemoved}`);
+    if (stats.messagesFailed > 0)
+      log(`   └─ Failed to copy:       ${stats.messagesFailed}`);
+    log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
 
     currentProgress.overallDone = sourceFolders.length;
     currentProgress.phase = shouldCancel ? "cancelled" : "done";
@@ -159,6 +205,7 @@ async function processQueue(sourceFolders, destination) {
 // ─── Process a Single Folder ──────────────────────────────────────────────────
 async function processSingleFolder(src, destination, log, broadcast) {
   processedFolderIds.add(src.id);
+  const stats = currentProgress.stats;
 
   // Pre-mark sub-folders so they don't get double-processed
   try {
@@ -191,9 +238,15 @@ async function processSingleFolder(src, destination, log, broadcast) {
       if (!sourceStillExists) {
         const displayPath = movedFolder ? movedFolder.path : "(moved)";
         log(`   ✅ Native move succeeded → ${displayPath}`);
+        stats.nativeMoves++;
+        stats.foldersProcessed++;
+        stats.foldersDeleted++;
         return;
       } else if (movedFolder) {
         log(`   ✅ Native move succeeded → ${movedFolder.path}`);
+        stats.nativeMoves++;
+        stats.foldersProcessed++;
+        stats.foldersDeleted++;
         return;
       } else {
         log(`   ⚠️ Native move didn't complete, using merge-copy…`);
@@ -203,6 +256,7 @@ async function processSingleFolder(src, destination, log, broadcast) {
     }
   }
 
+  stats.foldersProcessed++;
   log(`   🔄 Using merge-copy mode (cross-account)…`);
 
   // ── Strategy 2: Merge-copy (resumable) ───────────────────────────────────
@@ -260,6 +314,7 @@ async function processSingleFolder(src, destination, log, broadcast) {
           }
         }
       }
+      stats.messagesDuplicatesRemoved += dupeMessages.length;
       log(`   ✅ Removed ${dupeMessages.length} duplicate(s) from source`);
     }
 
@@ -303,6 +358,7 @@ async function processSingleFolder(src, destination, log, broadcast) {
           }
         }
         copiedMessages += batch.length;
+        stats.messagesCopied += batch.length;
         currentProgress.copied = copiedMessages;
         log(`   📋 Copied ${copiedMessages}/${totalNew} message(s)`);
         broadcast();
@@ -326,6 +382,7 @@ async function processSingleFolder(src, destination, log, broadcast) {
             log(`   📨 Message ${msg.id} imported via raw fallback`);
           } catch (importErr) {
             skippedMessages++;
+            stats.messagesFailed++;
             log(`   ❌ Skipped message ${msg.id}: ${importErr.message}`);
             continue;
           }
@@ -336,6 +393,7 @@ async function processSingleFolder(src, destination, log, broadcast) {
             await messenger.messages.delete([msg.id], { deletePermanently: true });
           } catch (_e) {}
           copiedMessages++;
+          stats.messagesCopied++;
           currentProgress.copied = copiedMessages;
           broadcast();
         }
@@ -366,6 +424,7 @@ async function processSingleFolder(src, destination, log, broadcast) {
   const remainingCount = await countMessages(src.id);
   if (remainingCount > 0) {
     log(`   ⚠️ Source folder "${folderName}" kept — ${remainingCount} message(s) remain.`);
+    stats.foldersKept++;
     return;
   }
 
@@ -375,6 +434,7 @@ async function processSingleFolder(src, destination, log, broadcast) {
       await sleep(2000);
       await messenger.folders.delete(src.id);
       log(`   🗑️ Removed source folder: ${folderName}`);
+      stats.foldersDeleted++;
       deleted = true;
     } catch (err) {
       if (attempt < 3) {
@@ -382,6 +442,7 @@ async function processSingleFolder(src, destination, log, broadcast) {
       } else {
         log(`   ⚠️ Could not remove source folder: ${err.message}`);
         log(`   ℹ️ The folder is empty — you can delete it manually.`);
+        stats.foldersKept++;
       }
     }
   }
