@@ -175,31 +175,35 @@ async function processSingleFolder(src, destination, log, broadcast) {
   const destRef = resolveDestId(destination.id);
 
   // ── Strategy 1: Native folders.move() ────────────────────────────────────
-  // Best for IMAP same-server (uses RENAME — instant, no data copy needed).
-  log(`   🚀 Attempting native folder move…`);
-  try {
-    const movedFolder = await messenger.folders.move(src.id, destRef);
+  // Only works within the same account (IMAP RENAME). Cross-account moves
+  // require copy-then-delete, so we skip straight to merge-copy.
+  const sameAccount = src.accountId === destination.accountId;
 
-    // Verify move succeeded — folders.move() can return null on some setups
-    let sourceStillExists = false;
-    try { await messenger.folders.get(src.id, false); sourceStillExists = true; } catch (_e) {}
+  if (sameAccount) {
+    log(`   🚀 Attempting native folder move…`);
+    try {
+      const movedFolder = await messenger.folders.move(src.id, destRef);
 
-    if (!sourceStillExists) {
-      // Source is gone → move succeeded
-      const displayPath = movedFolder ? movedFolder.path : "(moved)";
-      log(`   ✅ Native move succeeded → ${displayPath}`);
-      return;
-    } else if (movedFolder) {
-      log(`   ✅ Native move succeeded → ${movedFolder.path}`);
-      return;
-    } else {
-      log(`   ⚠️ Native move returned null and source still exists, falling back…`);
+      // Verify move succeeded — folders.move() can return null on some setups
+      let sourceStillExists = false;
+      try { await messenger.folders.get(src.id, false); sourceStillExists = true; } catch (_e) {}
+
+      if (!sourceStillExists) {
+        const displayPath = movedFolder ? movedFolder.path : "(moved)";
+        log(`   ✅ Native move succeeded → ${displayPath}`);
+        return;
+      } else if (movedFolder) {
+        log(`   ✅ Native move succeeded → ${movedFolder.path}`);
+        return;
+      } else {
+        log(`   ⚠️ Native move didn't complete, using merge-copy…`);
+      }
+    } catch (moveErr) {
+      log(`   ⚠️ Native move failed: ${moveErr.message}`);
     }
-  } catch (moveErr) {
-    log(`   ⚠️ Native move failed: ${moveErr.message}`);
   }
 
-  log(`   🔄 Falling back to merge-copy mode…`);
+  log(`   🔄 Using merge-copy mode (cross-account)…`);
 
   // ── Strategy 2: Merge-copy (resumable) ───────────────────────────────────
   // Creates destination if needed, copies only NEW messages (dedup by
@@ -238,9 +242,25 @@ async function processSingleFolder(src, destination, log, broadcast) {
     const newMessages = sourceMessages.filter(
       (m) => !destMessageIds.has(m.headerMessageId)
     );
-    const skippedDupes = sourceMessages.length - newMessages.length;
-    if (skippedDupes > 0) {
-      log(`   ⏭️ Skipping ${skippedDupes} message(s) already in destination`);
+    const dupeMessages = sourceMessages.filter(
+      (m) => destMessageIds.has(m.headerMessageId)
+    );
+
+    // Delete duplicates from source — they're confirmed in the destination
+    if (dupeMessages.length > 0) {
+      log(`   🧹 Deleting ${dupeMessages.length} duplicate(s) from source (already in destination)…`);
+      const dupeIds = dupeMessages.map((m) => m.id);
+      for (let i = 0; i < dupeIds.length; i += 10) {
+        const batch = dupeIds.slice(i, i + 10);
+        try {
+          await messenger.messages.delete(batch, { deletePermanently: true });
+        } catch (_e) {
+          for (const id of batch) {
+            try { await messenger.messages.delete([id], { deletePermanently: true }); } catch (_e2) {}
+          }
+        }
+      }
+      log(`   ✅ Removed ${dupeMessages.length} duplicate(s) from source`);
     }
 
     const totalNew = newMessages.length;
