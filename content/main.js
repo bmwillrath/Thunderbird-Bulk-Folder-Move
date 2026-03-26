@@ -106,9 +106,19 @@ function renderTree(folders, container, side) {
       cb.dataset.accountId = f.accountId;
       cb.checked = selectedSourceIds.has(f.id);
       cb.addEventListener("change", () => {
-        if (cb.checked) selectedSourceIds.add(f.id);
+        const isChecked = cb.checked;
+        // Toggle this folder
+        if (isChecked) selectedSourceIds.add(f.id);
         else selectedSourceIds.delete(f.id);
-        $sourceCount.textContent = `${selectedSourceIds.size} selected`;
+        // Cascade to all children (any folder whose path starts with this one + "/")
+        const parentPath = f.path.endsWith("/") ? f.path : f.path + "/";
+        for (const child of sourceFolders) {
+          if (child.path.startsWith(parentPath)) {
+            if (isChecked) selectedSourceIds.add(child.id);
+            else selectedSourceIds.delete(child.id);
+          }
+        }
+        reRenderSourceChecks();
         syncMoveButton();
       });
       row.appendChild(cb);
