@@ -179,7 +179,6 @@ html, body {
   gap: 8px;
   padding: 4px 16px;
   cursor: pointer;
-  user-select: none;
 }
 .folder-item:hover { 
   background-color: var(--in-content-item-hover); 

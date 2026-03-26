@@ -101,6 +101,21 @@ function folderIcon(type) {
   return map[type] || "📁";
 }
 
+// ─── Tree-based descendant lookup (uses parentId from folder walker) ─────────
+function getDescendantIds(folderId) {
+  const descendants = [];
+  const findChildren = (parentId) => {
+    for (const f of sourceFolders) {
+      if (String(f.parentId) === String(parentId)) {
+        descendants.push(String(f.id));
+        findChildren(f.id);
+      }
+    }
+  };
+  findChildren(folderId);
+  return descendants;
+}
+
 function renderTree(folders, container, side) {
   container.innerHTML = "";
   if (!folders.length) {
@@ -108,29 +123,28 @@ function renderTree(folders, container, side) {
     return;
   }
   for (const f of folders) {
-    const row = document.createElement("label");
+    const row = document.createElement("div");
     row.className = "folder-item";
     row.style.paddingLeft = `${16 + f.depth * 20}px`;
 
     if (side === "source") {
       const cb = document.createElement("input");
       cb.type = "checkbox";
-      cb.value = f.id;
+      cb.value = String(f.id);
       cb.dataset.path = f.path;
       cb.dataset.accountId = f.accountId;
-      cb.checked = selectedSourceIds.has(f.id);
-      cb.addEventListener("change", () => {
-        const isChecked = cb.checked;
-        // Toggle this folder
-        if (isChecked) selectedSourceIds.add(f.id);
-        else selectedSourceIds.delete(f.id);
-        // Cascade to all children (any folder whose path starts with this one + "/")
-        const parentPath = f.path.endsWith("/") ? f.path : f.path + "/";
-        for (const child of sourceFolders) {
-          if (child.path.startsWith(parentPath)) {
-            if (isChecked) selectedSourceIds.add(child.id);
-            else selectedSourceIds.delete(child.id);
-          }
+      cb.checked = selectedSourceIds.has(String(f.id));
+
+      cb.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const checked = cb.checked;
+        const fid = String(f.id);
+        if (checked) selectedSourceIds.add(fid);
+        else selectedSourceIds.delete(fid);
+        // Cascade to all descendants using tree structure
+        for (const descId of getDescendantIds(f.id)) {
+          if (checked) selectedSourceIds.add(descId);
+          else selectedSourceIds.delete(descId);
         }
         reRenderSourceChecks();
         syncMoveButton();
@@ -140,11 +154,13 @@ function renderTree(folders, container, side) {
       const rb = document.createElement("input");
       rb.type = "radio";
       rb.name = "dest-folder";
-      rb.value = f.id;
+      rb.value = String(f.id);
       rb.dataset.accountId = f.accountId;
-      rb.checked = selectedDestId === f.id;
-      rb.addEventListener("change", () => {
-        selectedDestId = f.id;
+      rb.checked = selectedDestId === String(f.id);
+
+      rb.addEventListener("click", (e) => {
+        e.stopPropagation();
+        selectedDestId = String(f.id);
         syncMoveButton();
       });
       row.appendChild(rb);
@@ -167,7 +183,7 @@ function renderTree(folders, container, side) {
 
 // ─── Select All / None ───────────────────────────────────────────────────────
 $btnSelectAll.addEventListener("click", () => {
-  sourceFolders.forEach((f) => selectedSourceIds.add(f.id));
+  sourceFolders.forEach((f) => selectedSourceIds.add(String(f.id)));
   reRenderSourceChecks();
   syncMoveButton();
 });
@@ -196,12 +212,12 @@ $btnMove.addEventListener("click", async () => {
   // Build source list from current selection
   const sources = [];
   for (const id of selectedSourceIds) {
-    const folder = sourceFolders.find((f) => f.id === id);
+    const folder = sourceFolders.find((f) => String(f.id) === id);
     if (folder) sources.push({ id: folder.id, path: folder.path, accountId: folder.accountId });
   }
 
   // Find dest accountId
-  const destFolder = destFolders.find((f) => f.id === selectedDestId);
+  const destFolder = destFolders.find((f) => String(f.id) === selectedDestId);
   const destination = { id: selectedDestId, accountId: destFolder ? destFolder.accountId : "" };
 
   // Confirm

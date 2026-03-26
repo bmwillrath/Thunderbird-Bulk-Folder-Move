@@ -54,16 +54,16 @@ async function handleGetFolders(accountId) {
     if (!account) return { ok: false, error: "Account not found" };
 
     const flatFolders = [];
-    const walk = (folders, depth) => {
+    const walk = (folders, depth, parentId) => {
       for (const f of folders) {
         flatFolders.push({
           id: f.id, name: f.name, path: f.path,
-          type: f.type, accountId, depth,
+          type: f.type, accountId, depth, parentId,
         });
-        if (f.subFolders && f.subFolders.length) walk(f.subFolders, depth + 1);
+        if (f.subFolders && f.subFolders.length) walk(f.subFolders, depth + 1, f.id);
       }
     };
-    walk(account.folders || [], 0);
+    walk(account.folders || [], 0, null);
     return { ok: true, folders: flatFolders };
   } catch (err) {
     return { ok: false, error: err.message };
