@@ -1,0 +1,306 @@
+/* ── Bulk Folder Move – Styles ─────────────────────────────────────────────── */
+
+/* ─── Reset & Base ─────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:          #0f1117;
+  --surface:     #1a1d27;
+  --surface-alt: #222632;
+  --border:      #2d3148;
+  --text:        #e4e6f0;
+  --text-dim:    #8c8fa3;
+  --accent:      #6C63FF;
+  --accent-glow: rgba(108, 99, 255, .35);
+  --cyan:        #3DD6F5;
+  --green:       #34D399;
+  --red:         #F87171;
+  --orange:      #FB923C;
+  --radius:      10px;
+  --radius-sm:   6px;
+  --font:        -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+}
+
+html, body {
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+/* ─── App Container ────────────────────────────────────────────────────────── */
+.app {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 24px 28px 40px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+/* ─── Header ───────────────────────────────────────────────────────────────── */
+.header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+.header-icon {
+  flex-shrink: 0;
+  background: var(--surface);
+  border-radius: var(--radius);
+  padding: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.header h1 {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.3px;
+  background: linear-gradient(135deg, var(--accent), var(--cyan));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+.subtitle {
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+/* ─── Columns ──────────────────────────────────────────────────────────────── */
+.columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+/* ─── Panel ────────────────────────────────────────────────────────────────── */
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  background: var(--surface-alt);
+  border-bottom: 1px solid var(--border);
+}
+.panel-header h2 {
+  font-size: 14px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-dim);
+}
+.badge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 10px;
+  border-radius: 20px;
+  background: var(--accent-glow);
+  color: var(--accent);
+}
+
+/* ─── Panel Toolbar ────────────────────────────────────────────────────────── */
+.panel-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.account-select {
+  flex: 1;
+  padding: 7px 10px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  outline: none;
+  cursor: pointer;
+  transition: border-color .2s;
+}
+.account-select:focus { border-color: var(--accent); }
+.account-select option { background: var(--bg); color: var(--text); }
+
+.toolbar-actions {
+  display: flex;
+  gap: 4px;
+}
+.btn-sm {
+  padding: 5px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-alt);
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: all .15s;
+}
+.btn-sm:hover { background: var(--border); color: var(--text); }
+
+/* ─── Folder Tree ──────────────────────────────────────────────────────────── */
+.folder-tree {
+  padding: 8px 0;
+  max-height: 340px;
+  overflow-y: auto;
+  flex: 1;
+}
+.folder-tree::-webkit-scrollbar { width: 6px; }
+.folder-tree::-webkit-scrollbar-track { background: transparent; }
+.folder-tree::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+.empty-state {
+  text-align: center;
+  padding: 40px 20px;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+.folder-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 16px;
+  cursor: pointer;
+  transition: background .12s;
+  user-select: none;
+}
+.folder-item:hover { background: var(--surface-alt); }
+.folder-item.selected { background: rgba(108, 99, 255, .10); }
+
+.folder-item input[type="checkbox"],
+.folder-item input[type="radio"] {
+  accent-color: var(--accent);
+  width: 15px;
+  height: 15px;
+  cursor: pointer;
+}
+.folder-icon { font-size: 16px; flex-shrink: 0; }
+.folder-name { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ─── Action Buttons ───────────────────────────────────────────────────────── */
+.actions {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+}
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 28px;
+  font-size: 14px;
+  font-weight: 600;
+  border: none;
+  border-radius: var(--radius);
+  background: linear-gradient(135deg, var(--accent), #8B5CF6);
+  color: #fff;
+  cursor: pointer;
+  transition: opacity .2s, transform .1s;
+  box-shadow: 0 4px 18px var(--accent-glow);
+}
+.btn-primary:hover:not(:disabled) { opacity: .9; transform: translateY(-1px); }
+.btn-primary:disabled {
+  opacity: .35;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+.btn-danger {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 24px;
+  font-size: 14px;
+  font-weight: 600;
+  border: 1px solid var(--red);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--red);
+  cursor: pointer;
+  transition: background .2s;
+}
+.btn-danger:hover { background: rgba(248, 113, 113, .12); }
+.btn-icon { font-size: 12px; }
+
+/* ─── Progress Panel ───────────────────────────────────────────────────────── */
+.progress-panel { margin-top: 4px; }
+
+.progress-bars { padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
+.progress-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.progress-row label {
+  width: 110px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: .3px;
+  flex-shrink: 0;
+}
+.progress-track {
+  flex: 1;
+  height: 8px;
+  background: var(--bg);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.progress-fill {
+  height: 100%;
+  width: 0%;
+  border-radius: 4px;
+  background: linear-gradient(90deg, var(--accent), #8B5CF6);
+  transition: width .3s ease;
+}
+.progress-fill.accent {
+  background: linear-gradient(90deg, var(--cyan), var(--green));
+}
+.progress-text {
+  width: 70px;
+  text-align: right;
+  font-size: 12px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ─── Log ──────────────────────────────────────────────────────────────────── */
+.log-container {
+  border-top: 1px solid var(--border);
+  max-height: 200px;
+  overflow-y: auto;
+}
+.log-container::-webkit-scrollbar { width: 6px; }
+.log-container::-webkit-scrollbar-track { background: transparent; }
+.log-container::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+.log {
+  padding: 12px 16px;
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--text-dim);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ─── Animations ───────────────────────────────────────────────────────────── */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.panel  { animation: fadeIn .3s ease; }
+.folder-item { animation: fadeIn .15s ease both; }

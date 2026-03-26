@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bulk Folder Move</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app">
+    <!-- Header -->
+    <header class="header">
+      <div class="header-icon">
+        <svg viewBox="0 0 64 64" width="32" height="32">
+          <defs>
+            <linearGradient id="hg1" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stop-color="#6C63FF"/>
+              <stop offset="100%" stop-color="#3DD6F5"/>
+            </linearGradient>
+          </defs>
+          <path d="M6 18 L6 50 Q6 54 10 54 L38 54 Q42 54 42 50 L42 24 Q42 20 38 20 L24 20 L20 14 L10 14 Q6 14 6 18Z" fill="url(#hg1)" opacity="0.4"/>
+          <path d="M16 24 L16 56 Q16 60 20 60 L48 60 Q52 60 52 56 L52 30 Q52 26 48 26 L34 26 L30 20 L20 20 Q16 20 16 24Z" fill="url(#hg1)"/>
+          <path d="M36 8 L50 8 L50 4 L60 12 L50 20 L50 16 L36 16 Z" fill="#FF9800"/>
+        </svg>
+      </div>
+      <div>
+        <h1>Bulk Folder Move</h1>
+        <p class="subtitle">Move folders and emails between accounts safely</p>
+      </div>
+    </header>
+
+    <!-- Main layout: two columns -->
+    <div class="columns">
+      <!-- Source column -->
+      <section class="panel source-panel">
+        <div class="panel-header">
+          <h2>Source Folders</h2>
+          <span class="badge" id="source-count">0 selected</span>
+        </div>
+        <div class="panel-toolbar">
+          <select id="source-account" class="account-select">
+            <option value="">— Select source account —</option>
+          </select>
+          <div class="toolbar-actions">
+            <button id="btn-select-all" class="btn-sm" title="Select all">All</button>
+            <button id="btn-select-none" class="btn-sm" title="Deselect all">None</button>
+          </div>
+        </div>
+        <div class="folder-tree" id="source-tree">
+          <div class="empty-state">Select an account above to list its folders.</div>
+        </div>
+      </section>
+
+      <!-- Destination column -->
+      <section class="panel dest-panel">
+        <div class="panel-header">
+          <h2>Destination</h2>
+        </div>
+        <div class="panel-toolbar">
+          <select id="dest-account" class="account-select">
+            <option value="">— Select destination account —</option>
+          </select>
+        </div>
+        <div class="folder-tree" id="dest-tree">
+          <div class="empty-state">Select an account above to choose a destination folder.</div>
+        </div>
+      </section>
+    </div>
+
+    <!-- Actions -->
+    <div class="actions">
+      <button id="btn-move" class="btn-primary" disabled>
+        <span class="btn-icon">▶</span> Move Selected Folders
+      </button>
+      <button id="btn-cancel" class="btn-danger" style="display:none;">
+        <span class="btn-icon">■</span> Cancel
+      </button>
+    </div>
+
+    <!-- Progress area -->
+    <section class="panel progress-panel" id="progress-panel" style="display:none;">
+      <div class="panel-header">
+        <h2>Progress</h2>
+        <span class="badge" id="progress-badge">Idle</span>
+      </div>
+      <div class="progress-bars">
+        <div class="progress-row">
+          <label>Overall</label>
+          <div class="progress-track"><div class="progress-fill" id="progress-overall"></div></div>
+          <span class="progress-text" id="progress-overall-text">0 / 0</span>
+        </div>
+        <div class="progress-row">
+          <label>Current Folder</label>
+          <div class="progress-track"><div class="progress-fill accent" id="progress-folder"></div></div>
+          <span class="progress-text" id="progress-folder-text">0 / 0</span>
+        </div>
+      </div>
+      <div class="log-container">
+        <div class="log" id="log"></div>
+      </div>
+    </section>
+  </div>
+
+  <script src="main.js"></script>
+</body>
+</html>

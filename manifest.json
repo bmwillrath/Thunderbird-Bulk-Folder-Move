@@ -1,0 +1,31 @@
+{
+  "manifest_version": 2,
+  "name": "Bulk Folder Move",
+  "version": "1.0.0",
+  "description": "Bulk move folders and their emails between Thunderbird accounts using a safe copy-then-delete queue.",
+  "author": "BTE",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "bulk-folder-move@bte.com.au",
+      "strict_min_version": "115.0"
+    }
+  },
+  "permissions": [
+    "accountsRead",
+    "accountsFolders",
+    "messagesRead",
+    "messagesMove",
+    "messagesDelete"
+  ],
+  "icons": {
+    "64": "icons/icon.svg",
+    "32": "icons/icon.svg"
+  },
+  "browser_action": {
+    "default_icon": "icons/icon.svg",
+    "default_title": "Bulk Folder Move"
+  },
+  "background": {
+    "scripts": ["background.js"]
+  }
+}
