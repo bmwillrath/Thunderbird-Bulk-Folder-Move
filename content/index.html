@@ -24,7 +24,7 @@
         </svg>
       </div>
       <div>
-        <h1>Bulk Folder Move</h1>
+        <h1>Bulk Folder Move <span id="app-version" class="version-badge"></span></h1>
         <p class="subtitle">Move folders and emails between accounts safely</p>
       </div>
     </header>
@@ -44,6 +44,9 @@
           <div class="toolbar-actions">
             <button id="btn-select-all" class="btn-sm" title="Select all">All</button>
             <button id="btn-select-none" class="btn-sm" title="Deselect all">None</button>
+            <span class="toolbar-separator"></span>
+            <button id="btn-source-expand" class="btn-sm" title="Expand all folders">Expand</button>
+            <button id="btn-source-collapse" class="btn-sm" title="Collapse all folders">Collapse</button>
           </div>
         </div>
         <div class="folder-tree" id="source-tree">
@@ -60,6 +63,10 @@
           <select id="dest-account" class="account-select">
             <option value="">— Select destination account —</option>
           </select>
+          <div class="toolbar-actions">
+            <button id="btn-dest-expand" class="btn-sm" title="Expand all folders">Expand</button>
+            <button id="btn-dest-collapse" class="btn-sm" title="Collapse all folders">Collapse</button>
+          </div>
         </div>
         <div class="folder-tree" id="dest-tree">
           <div class="empty-state">Select an account above to choose a destination folder.</div>

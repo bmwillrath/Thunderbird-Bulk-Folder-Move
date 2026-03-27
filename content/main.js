@@ -20,6 +20,12 @@ const $progressFolder      = document.getElementById("progress-folder");
 const $progressFolderText  = document.getElementById("progress-folder-text");
 const $log            = document.getElementById("log");
 
+// ─── Toolbar Buttons ──────────────────────────────────────────────────────────
+const $btnSourceExpand   = document.getElementById("btn-source-expand");
+const $btnSourceCollapse = document.getElementById("btn-source-collapse");
+const $btnDestExpand     = document.getElementById("btn-dest-expand");
+const $btnDestCollapse   = document.getElementById("btn-dest-collapse");
+
 // ─── State ────────────────────────────────────────────────────────────────────
 let accounts = [];
 let sourceFolders = [];   // flat list with .key, .parentKey, .depth etc.
@@ -29,6 +35,9 @@ let selectedDestKey = null;
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
 (async () => {
+  const manifest = messenger.runtime.getManifest();
+  document.getElementById("app-version").textContent = "v" + manifest.version;
+
   const res = await messenger.runtime.sendMessage({ type: "get-accounts" });
   if (!res.ok) { alert("Failed to load accounts: " + res.error); return; }
   accounts = res.accounts;
@@ -117,59 +126,116 @@ function renderTree(folders, container, side) {
     container.innerHTML = '<div class="empty-state">No folders found.</div>';
     return;
   }
-  for (const f of folders) {
-    const row = document.createElement("div");
-    row.className = "folder-item";
-    row.style.paddingLeft = `${16 + f.depth * 20}px`;
 
-    if (side === "source") {
-      const cb = document.createElement("input");
-      cb.type = "checkbox";
-      cb.value = f.key;
-      cb.checked = selectedSourceKeys.has(f.key);
+  function buildDOM(parentKey, targetContainer) {
+    const children = folders.filter((f) => f.parentKey === parentKey);
+    let totalDescendantsOfParent = 0;
 
-      cb.addEventListener("click", (e) => {
-        e.stopPropagation();
-        const checked = cb.checked;
-        if (checked) selectedSourceKeys.add(f.key);
-        else selectedSourceKeys.delete(f.key);
-        // Cascade to descendants
-        for (const descKey of getDescendantKeys(f.key)) {
-          if (checked) selectedSourceKeys.add(descKey);
-          else selectedSourceKeys.delete(descKey);
+    for (const f of children) {
+      const folderWrapper = document.createElement("div");
+      folderWrapper.className = "folder-wrapper";
+
+      const row = document.createElement("div");
+      row.className = "folder-item";
+
+      const childFolders = folders.filter((child) => child.parentKey === f.key);
+      const hasChildren = childFolders.length > 0;
+
+      const toggle = document.createElement("span");
+      toggle.className = "folder-toggle";
+      if (hasChildren) {
+        toggle.innerHTML = "▼";
+        toggle.addEventListener("click", (e) => {
+          e.stopPropagation();
+          folderWrapper.classList.toggle("collapsed");
+          toggle.innerHTML = folderWrapper.classList.contains("collapsed") ? "▶" : "▼";
+        });
+      } else {
+        toggle.classList.add("empty-toggle");
+      }
+      row.appendChild(toggle);
+
+      if (side === "source") {
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.value = f.key;
+        cb.checked = selectedSourceKeys.has(f.key);
+
+        cb.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const checked = cb.checked;
+          if (checked) selectedSourceKeys.add(f.key);
+          else selectedSourceKeys.delete(f.key);
+          // Cascade to descendants
+          for (const descKey of getDescendantKeys(f.key)) {
+            if (checked) selectedSourceKeys.add(descKey);
+            else selectedSourceKeys.delete(descKey);
+          }
+          reRenderSourceChecks();
+          syncMoveButton();
+        });
+        row.appendChild(cb);
+      } else {
+        const rb = document.createElement("input");
+        rb.type = "radio";
+        rb.name = "dest-folder";
+        rb.value = f.key;
+        rb.checked = selectedDestKey === f.key;
+
+        rb.addEventListener("click", (e) => {
+          e.stopPropagation();
+          selectedDestKey = f.key;
+          syncMoveButton();
+        });
+        row.appendChild(rb);
+      }
+
+      const icon = document.createElement("span");
+      icon.className = "folder-icon";
+      icon.textContent = folderIcon(f.type);
+      row.appendChild(icon);
+
+      const name = document.createElement("span");
+      name.className = "folder-name";
+      name.textContent = f.name;
+      name.title = f.path;
+      row.appendChild(name);
+
+      folderWrapper.appendChild(row);
+      targetContainer.appendChild(folderWrapper);
+
+      let descendantsCount = 0;
+      if (hasChildren) {
+        const childrenContainer = document.createElement("div");
+        childrenContainer.className = "folder-children";
+        descendantsCount = buildDOM(f.key, childrenContainer);
+        folderWrapper.appendChild(childrenContainer);
+
+        const countSpan = document.createElement("span");
+        countSpan.className = "child-count";
+        countSpan.textContent = `(${descendantsCount})`;
+        row.appendChild(countSpan);
+      }
+
+      totalDescendantsOfParent += 1 + descendantsCount;
+
+      // Make whole row clickable
+      row.addEventListener("click", (e) => {
+        if (e.target.tagName === "INPUT" || e.target.classList.contains("folder-toggle")) return;
+        if (side === "source") {
+          const cb = row.querySelector('input[type="checkbox"]');
+          cb.click();
+        } else {
+          const rb = row.querySelector('input[type="radio"]');
+          rb.click();
         }
-        reRenderSourceChecks();
-        syncMoveButton();
       });
-      row.appendChild(cb);
-    } else {
-      const rb = document.createElement("input");
-      rb.type = "radio";
-      rb.name = "dest-folder";
-      rb.value = f.key;
-      rb.checked = selectedDestKey === f.key;
-
-      rb.addEventListener("click", (e) => {
-        e.stopPropagation();
-        selectedDestKey = f.key;
-        syncMoveButton();
-      });
-      row.appendChild(rb);
     }
 
-    const icon = document.createElement("span");
-    icon.className = "folder-icon";
-    icon.textContent = folderIcon(f.type);
-    row.appendChild(icon);
-
-    const name = document.createElement("span");
-    name.className = "folder-name";
-    name.textContent = f.name;
-    name.title = f.path;
-    row.appendChild(name);
-
-    container.appendChild(row);
+    return totalDescendantsOfParent;
   }
+
+  buildDOM(null, container);
 }
 
 // ─── Select All / None ───────────────────────────────────────────────────────
@@ -183,6 +249,26 @@ $btnSelectNone.addEventListener("click", () => {
   reRenderSourceChecks();
   syncMoveButton();
 });
+
+// ─── Expand / Collapse All ───────────────────────────────────────────────────
+function toggleAllTree(container, collapse) {
+  container.querySelectorAll(".folder-wrapper").forEach((wrapper) => {
+    if (wrapper.querySelector(".folder-children")) {
+      if (collapse) {
+        wrapper.classList.add("collapsed");
+        wrapper.querySelector(".folder-toggle").innerHTML = "▶";
+      } else {
+        wrapper.classList.remove("collapsed");
+        wrapper.querySelector(".folder-toggle").innerHTML = "▼";
+      }
+    }
+  });
+}
+
+if ($btnSourceExpand) $btnSourceExpand.addEventListener("click", () => toggleAllTree($sourceTree, false));
+if ($btnSourceCollapse) $btnSourceCollapse.addEventListener("click", () => toggleAllTree($sourceTree, true));
+if ($btnDestExpand) $btnDestExpand.addEventListener("click", () => toggleAllTree($destTree, false));
+if ($btnDestCollapse) $btnDestCollapse.addEventListener("click", () => toggleAllTree($destTree, true));
 
 function reRenderSourceChecks() {
   $sourceTree.querySelectorAll('input[type="checkbox"]').forEach((cb) => {

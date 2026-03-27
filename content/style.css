@@ -79,6 +79,16 @@ html, body {
   font-size: 13px;
   opacity: 0.7;
 }
+.version-badge {
+  font-size: 11px;
+  vertical-align: middle;
+  background-color: var(--in-content-primary-button-background);
+  color: var(--in-content-primary-button-text-color);
+  padding: 2px 6px;
+  border-radius: 8px;
+  margin-left: 6px;
+  font-weight: 500;
+}
 
 /* ─── Columns ──────────────────────────────────────────────────────────────── */
 .columns {
@@ -142,7 +152,14 @@ html, body {
 
 .toolbar-actions {
   display: flex;
+  align-items: center;
   gap: 4px;
+}
+.toolbar-separator {
+  width: 1px;
+  height: 16px;
+  background-color: var(--in-content-box-border-color);
+  margin: 0 4px;
 }
 .btn-sm {
   padding: 4px 8px;
@@ -201,6 +218,35 @@ html, body {
   white-space: nowrap; 
   overflow: hidden; 
   text-overflow: ellipsis; 
+}
+.child-count {
+  font-size: 11px;
+  opacity: 0.5;
+  margin-left: 4px;
+}
+
+.folder-wrapper.collapsed > .folder-children {
+  display: none;
+}
+.folder-children {
+  margin-left: 20px;
+  padding-left: 4px;
+  border-left: 1px dashed var(--in-content-box-border-color);
+}
+.folder-toggle {
+  display: inline-block;
+  width: 16px;
+  text-align: center;
+  font-size: 10px;
+  cursor: pointer;
+  opacity: 0.5;
+  user-select: none;
+}
+.folder-toggle:hover {
+  opacity: 1;
+}
+.folder-toggle.empty-toggle {
+  cursor: default;
 }
 
 /* ─── Action Buttons ───────────────────────────────────────────────────────── */
