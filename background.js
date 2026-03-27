@@ -517,7 +517,6 @@ async function processSingleFolder(src, destination, log, broadcast) {
 
       // Per-message fallback with individual dynamic timeouts
       log(`   🔄 Falling back to per-message transfer (${remainingBatch.length} remaining)…`);
-      let perMsgConfirmed = folderConfirmedReady;
 
       for (const msg of remainingBatch) {
         if (shouldCancel) return;
