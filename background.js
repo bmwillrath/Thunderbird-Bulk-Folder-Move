@@ -317,7 +317,7 @@ async function processSingleFolder(src, destination, log, broadcast) {
   if (sameAccount) {
     log(`   🚀 Attempting native folder move…`);
     try {
-      const movedFolder = await withTimeout(messenger.folders.move(realSrc, realDest), 30000, "folders.move");
+      const movedFolder = await withTimeout(messenger.folders.move(realSrc, realDest), 120000, "folders.move");
 
       // Verify source is gone
       const srcCheck = await lookupFolder(src.accountId, src.path, false);
@@ -338,7 +338,13 @@ async function processSingleFolder(src, destination, log, broadcast) {
         log(`   ⚠️ Native move didn't complete, using merge-copy…`);
       }
     } catch (moveErr) {
-      log(`   ⚠️ Native move failed: ${moveErr.message}`);
+      const isTimeout = moveErr.message && moveErr.message.includes("Timed out");
+      if (isTimeout) {
+        log(`   ⚠️ Native move timed out. Waiting 10s for server to settle before merge-copy…`);
+        await sleep(10000);
+      } else {
+        log(`   ⚠️ Native move failed: ${moveErr.message}`);
+      }
     }
   }
 
@@ -427,24 +433,23 @@ async function processSingleFolder(src, destination, log, broadcast) {
     log(`   📧 ${totalNew} new message(s) to copy`);
     broadcast();
 
-    // Copy in batches with dynamic timeouts
-    // Batch: 60s base + 15s/MB, max 900s (15 min)
-    // Individual: 30s base + 12s/MB, max 300s (5 min)
+    // Copy in batches with dynamic timeouts based on 1Mb/s downlink/uplink expectations
+    // 1Mb/s ~= 7.5MB per minute. Base timeout = 5m (37.5MB), increased linearly max 15m.
     const BATCH_SIZE = 10;
-    const ESCALATING_DELAYS = [0, 10000, 20000, 60000, 210000];
-    const QUICK_RETRIES = [0, 2000, 4000];
-    let folderConfirmedReady = false;
-    let consecutiveTimeouts = 0;
+    const RAMP_DELAYS = [10000, 20000, 30000, 60000, 90000, 90000];
 
     function calcBatchTimeout(msgs) {
       const totalBytes = msgs.reduce((sum, m) => sum + (m.size || 0), 0);
       const totalMB = totalBytes / (1024 * 1024);
-      return Math.min(60000 + Math.ceil(totalMB) * 15000, 900000);
+      const extraMB = Math.max(0, totalMB - 37.5);
+      // 300,000ms base (5 min) + 60,000ms per 7.5MB extra. Cap at 900,000 (15 min)
+      return Math.min(300000 + Math.ceil(extraMB / 7.5) * 60000, 900000);
     }
 
     function calcMessageTimeout(msg) {
       const mb = (msg.size || 0) / (1024 * 1024);
-      return Math.min(30000 + Math.ceil(mb) * 12000, 300000);
+      const extraMB = Math.max(0, mb - 37.5);
+      return Math.min(300000 + Math.ceil(extraMB / 7.5) * 60000, 900000);
     }
 
     for (let i = 0; i < newMessages.length; i += BATCH_SIZE) {
@@ -453,35 +458,14 @@ async function processSingleFolder(src, destination, log, broadcast) {
       const batchIds = batch.map((m) => m.id);
       let batchCopied = false;
 
-      const delays = folderConfirmedReady ? QUICK_RETRIES : ESCALATING_DELAYS;
       const batchTimeout = calcBatchTimeout(batch);
       const batchTimeoutSec = Math.round(batchTimeout / 1000);
 
-      // Fix 3: Connection recovery after consecutive timeouts
-      if (consecutiveTimeouts >= 2) {
-        log(`   🔌 Connection may be stale — pausing 30s for recovery…`);
-        await sleep(30000);
-        consecutiveTimeouts = 0;
-      }
-
-      for (let attempt = 0; attempt < delays.length && !batchCopied; attempt++) {
-        if (shouldCancel) return;
-        if (delays[attempt] > 0) {
-          const waitSec = delays[attempt] / 1000;
-          log(`   ⏳ Waiting ${waitSec}s before retry (attempt ${attempt + 1}/${delays.length})…`);
-          await sleep(delays[attempt]);
-        }
-        try {
-          await withTimeout(messenger.messages.copy(batchIds, destSubFolder), batchTimeout, `messages.copy batch (${batchTimeoutSec}s)`);
-          batchCopied = true;
-          folderConfirmedReady = true;
-          consecutiveTimeouts = 0;
-        } catch (err) {
-          const isTimeout = err.message && err.message.includes("Timed out");
-          if (isTimeout) consecutiveTimeouts++;
-          else consecutiveTimeouts = 0;
-          log(`   ⚠️ Batch copy attempt ${attempt + 1}/${delays.length} failed: ${err.message}`);
-        }
+      try {
+        await withTimeout(messenger.messages.copy(batchIds, destSubFolder), batchTimeout, `messages.copy batch (${batchTimeoutSec}s)`);
+        batchCopied = true;
+      } catch (err) {
+        log(`   ⚠️ Batch copy failed (${err.message}). Instant fallback to per-message…`);
       }
 
       if (batchCopied) {
@@ -540,60 +524,61 @@ async function processSingleFolder(src, destination, log, broadcast) {
         let msgCopied = false;
         const msgTimeout = calcMessageTimeout(msg);
         const msgTimeoutSec = Math.round(msgTimeout / 1000);
-        const msgDelays = perMsgConfirmed ? [0] : ESCALATING_DELAYS;
 
-        // Fix 3: Connection recovery
-        if (consecutiveTimeouts >= 2) {
-          log(`   🔌 Connection recovery — pausing 30s…`);
-          await sleep(30000);
-          consecutiveTimeouts = 0;
-        }
-
-        for (let attempt = 0; attempt < msgDelays.length && !msgCopied; attempt++) {
-          if (shouldCancel) return;
-          if (msgDelays[attempt] > 0) {
-            const waitSec = msgDelays[attempt] / 1000;
-            log(`   ⏳ Waiting ${waitSec}s before retry…`);
-            await sleep(msgDelays[attempt]);
-          }
-          try {
-            await withTimeout(messenger.messages.copy([msg.id], destSubFolder), msgTimeout, `messages.copy single (${msgTimeoutSec}s)`);
+        try {
+          await withTimeout(messenger.messages.copy([msg.id], destSubFolder), msgTimeout, `messages.copy single (${msgTimeoutSec}s)`);
+          msgCopied = true;
+        } catch (copyErr) {
+          if (copyErr.message && copyErr.message.includes("already contains")) {
+            log(`   ✅ Message ${msg.id} already in destination — cleaning source`);
             msgCopied = true;
-            perMsgConfirmed = true;
-            folderConfirmedReady = true;
-            consecutiveTimeouts = 0;
-          } catch (copyErr) {
-            // Fix 4: "already contains" = success
-            if (copyErr.message && copyErr.message.includes("already contains")) {
-              log(`   ✅ Message ${msg.id} already in destination — cleaning source`);
-              msgCopied = true;
-              perMsgConfirmed = true;
-              folderConfirmedReady = true;
-              consecutiveTimeouts = 0;
+          } else {
+            const isTimeout = copyErr.message && copyErr.message.includes("Timed out");
+            
+            if (isTimeout) {
+              log(`   ⚠️ Single message timed out (${msgTimeoutSec}s). Likely phantom copying in background.`);
+              const arrivedMsgs = await collectMessageIds(destSubFolder);
+              if (msg.headerMessageId && arrivedMsgs.has(msg.headerMessageId)) {
+                log(`   ✅ Message ${msg.id} phantom copied successfully.`);
+                msgCopied = true;
+              }
             } else {
-              const isTimeout = copyErr.message && copyErr.message.includes("Timed out");
-              if (isTimeout) consecutiveTimeouts++;
-              // Try raw fallback
+              // EXPLICIT FAILURE - Ramped Retry for EWS / Connection recovery
+              log(`   ⚠️ Explicit Failure on message ${msg.id}: ${copyErr.message}. Initiating Ramped Retry…`);
+              
+              for (let r = 0; r < RAMP_DELAYS.length && !msgCopied; r++) {
+                if (shouldCancel) return;
+                const waitSec = RAMP_DELAYS[r] / 1000;
+                log(`   ⏳ Throttling recovery: Waiting ${waitSec}s before retry (attempt ${r + 1}/${RAMP_DELAYS.length})…`);
+                await sleep(RAMP_DELAYS[r]);
+
+                try {
+                  await withTimeout(messenger.messages.copy([msg.id], destSubFolder), msgTimeout, `messages.copy single retry`);
+                  msgCopied = true;
+                  log(`   ✅ Message ${msg.id} successfully copied after throttling recovery.`);
+                } catch (retryErr) {
+                  if (retryErr.message && retryErr.message.includes("already contains")) {
+                     msgCopied = true;
+                  }
+                }
+              }
+            }
+
+            // Raw Fallback if STILL failed
+            if (!msgCopied) {
+              log(`   🔄 Standard copy failed or timed out. Attempting RAW import fallback for message ${msg.id}…`);
               try {
                 const rawFile = await withTimeout(messenger.messages.getRaw(msg.id, { data_format: "File" }), msgTimeout, "messages.getRaw");
                 await withTimeout(messenger.messages.import(rawFile, destSubFolder), msgTimeout, "messages.import");
                 msgCopied = true;
-                perMsgConfirmed = true;
-                folderConfirmedReady = true;
-                consecutiveTimeouts = 0;
                 log(`   📨 Message ${msg.id} imported via raw fallback`);
               } catch (importErr) {
-                // Fix 4: "already contains" = success
                 if (importErr.message && importErr.message.includes("already contains")) {
-                  log(`   ✅ Message ${msg.id} already in destination — cleaning source`);
                   msgCopied = true;
-                  perMsgConfirmed = true;
-                  folderConfirmedReady = true;
-                  consecutiveTimeouts = 0;
-                } else if (attempt === msgDelays.length - 1) {
+                } else {
                   skippedMessages++;
                   stats.messagesFailed++;
-                  log(`   ❌ Skipped message ${msg.id}: ${importErr.message}`);
+                  log(`   ❌ Permanent failure on message ${msg.id}: ${importErr.message}`);
                 }
               }
             }
@@ -695,45 +680,39 @@ async function processSingleFolder(src, destination, log, broadcast) {
 // Collect all messages from a folder (pass real MailFolder object)
 async function collectMessages(mailFolder) {
   const messages = [];
-  try {
-    let page = await withTimeout(messenger.messages.list(mailFolder), 60000, "messages.list");
+  let page = await withTimeout(messenger.messages.list(mailFolder), 60000, "messages.list");
+  messages.push(...page.messages);
+  while (page.id) {
+    page = await withTimeout(messenger.messages.continueList(page.id), 60000, "messages.continueList");
     messages.push(...page.messages);
-    while (page.id) {
-      page = await withTimeout(messenger.messages.continueList(page.id), 60000, "messages.continueList");
-      messages.push(...page.messages);
-    }
-  } catch (_e) {}
+  }
   return messages;
 }
 
 // Collect Message-ID headers from a folder
 async function collectMessageIds(mailFolder) {
   const ids = new Set();
-  try {
-    let page = await withTimeout(messenger.messages.list(mailFolder), 60000, "messages.list");
+  let page = await withTimeout(messenger.messages.list(mailFolder), 60000, "messages.list");
+  for (const m of page.messages) {
+    if (m.headerMessageId) ids.add(m.headerMessageId);
+  }
+  while (page.id) {
+    page = await withTimeout(messenger.messages.continueList(page.id), 60000, "messages.continueList");
     for (const m of page.messages) {
       if (m.headerMessageId) ids.add(m.headerMessageId);
     }
-    while (page.id) {
-      page = await withTimeout(messenger.messages.continueList(page.id), 60000, "messages.continueList");
-      for (const m of page.messages) {
-        if (m.headerMessageId) ids.add(m.headerMessageId);
-      }
-    }
-  } catch (_e) {}
+  }
   return ids;
 }
 
 // Count messages in a folder
 async function countMessages(mailFolder) {
   let count = 0;
-  try {
-    let page = await withTimeout(messenger.messages.list(mailFolder), 60000, "messages.list");
+  let page = await withTimeout(messenger.messages.list(mailFolder), 60000, "messages.list");
+  count += page.messages.length;
+  while (page.id) {
+    page = await withTimeout(messenger.messages.continueList(page.id), 60000, "messages.continueList");
     count += page.messages.length;
-    while (page.id) {
-      page = await withTimeout(messenger.messages.continueList(page.id), 60000, "messages.continueList");
-      count += page.messages.length;
-    }
-  } catch (_e) {}
+  }
   return count;
 }
