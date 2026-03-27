@@ -1,4 +1,6 @@
 // ── Bulk Folder Move – UI Script ──────────────────────────────────────────────
+// Uses folder.key (composite accountId:path) for identification,
+// compatible with TB 115+ (no MailFolder.id) and TB 128+ (has MailFolder.id).
 
 // ─── DOM refs ─────────────────────────────────────────────────────────────────
 const $sourceAccount  = document.getElementById("source-account");
@@ -20,10 +22,10 @@ const $log            = document.getElementById("log");
 
 // ─── State ────────────────────────────────────────────────────────────────────
 let accounts = [];
-let sourceFolders = [];   // currently displayed source folders
-let selectedSourceIds = new Set();
-let destFolders = [];     // currently displayed dest folders
-let selectedDestId = null;
+let sourceFolders = [];   // flat list with .key, .parentKey, .depth etc.
+let selectedSourceKeys = new Set();
+let destFolders = [];
+let selectedDestKey = null;
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
 (async () => {
@@ -32,8 +34,6 @@ let selectedDestId = null;
   accounts = res.accounts;
   populateAccountDropdowns();
   syncMoveButton();
-
-  // Poll for ongoing progress in case the tab was reopened mid-operation
   pollProgress();
 })();
 
@@ -48,14 +48,14 @@ function populateAccountDropdowns() {
 
 $sourceAccount.addEventListener("change", async () => {
   const id = $sourceAccount.value;
-  selectedSourceIds.clear();
+  selectedSourceKeys.clear();
   if (!id) { $sourceTree.innerHTML = '<div class="empty-state">Select an account above to list its folders.</div>'; syncMoveButton(); return; }
   await loadFolderTree(id, "source");
 });
 
 $destAccount.addEventListener("change", async () => {
   const id = $destAccount.value;
-  selectedDestId = null;
+  selectedDestKey = null;
   if (!id) { $destTree.innerHTML = '<div class="empty-state">Select an account above to choose a destination folder.</div>'; syncMoveButton(); return; }
   await loadFolderTree(id, "dest");
 });
@@ -71,16 +71,16 @@ async function loadFolderTree(accountId, side) {
   if (side === "source") {
     sourceFolders = res.folders;
   } else {
-    // Prepend a virtual "Account Root" entry so the user can move folders
-    // to the top level of the account (the parent of Inbox, Sent, etc.)
     const acct = accounts.find((a) => a.id === accountId);
     const rootEntry = {
-      id: `account:${accountId}`,
+      key: "account:" + accountId,
+      id: null,
       name: `📫 ${acct ? acct.name : "Account"} (Root)`,
       path: "/",
       type: "root",
       accountId,
       depth: 0,
+      parentKey: null,
     };
     destFolders = [rootEntry, ...res.folders];
   }
@@ -90,29 +90,24 @@ async function loadFolderTree(accountId, side) {
 
 function folderIcon(type) {
   const map = {
-    inbox:   "📥",
-    sent:    "📤",
-    drafts:  "📝",
-    trash:   "🗑️",
-    junk:    "⚠️",
-    archives:"📦",
-    outbox:  "📬",
+    inbox: "📥", sent: "📤", drafts: "📝", trash: "🗑️",
+    junk: "⚠️", archives: "📦", outbox: "📬",
   };
   return map[type] || "📁";
 }
 
-// ─── Tree-based descendant lookup (uses parentId from folder walker) ─────────
-function getDescendantIds(folderId) {
+// Get all descendant keys using parentKey tree structure
+function getDescendantKeys(parentKey) {
   const descendants = [];
-  const findChildren = (parentId) => {
+  const findChildren = (pk) => {
     for (const f of sourceFolders) {
-      if (String(f.parentId) === String(parentId)) {
-        descendants.push(String(f.id));
-        findChildren(f.id);
+      if (f.parentKey === pk) {
+        descendants.push(f.key);
+        findChildren(f.key);
       }
     }
   };
-  findChildren(folderId);
+  findChildren(parentKey);
   return descendants;
 }
 
@@ -130,21 +125,18 @@ function renderTree(folders, container, side) {
     if (side === "source") {
       const cb = document.createElement("input");
       cb.type = "checkbox";
-      cb.value = String(f.id);
-      cb.dataset.path = f.path;
-      cb.dataset.accountId = f.accountId;
-      cb.checked = selectedSourceIds.has(String(f.id));
+      cb.value = f.key;
+      cb.checked = selectedSourceKeys.has(f.key);
 
       cb.addEventListener("click", (e) => {
         e.stopPropagation();
         const checked = cb.checked;
-        const fid = String(f.id);
-        if (checked) selectedSourceIds.add(fid);
-        else selectedSourceIds.delete(fid);
-        // Cascade to all descendants using tree structure
-        for (const descId of getDescendantIds(f.id)) {
-          if (checked) selectedSourceIds.add(descId);
-          else selectedSourceIds.delete(descId);
+        if (checked) selectedSourceKeys.add(f.key);
+        else selectedSourceKeys.delete(f.key);
+        // Cascade to descendants
+        for (const descKey of getDescendantKeys(f.key)) {
+          if (checked) selectedSourceKeys.add(descKey);
+          else selectedSourceKeys.delete(descKey);
         }
         reRenderSourceChecks();
         syncMoveButton();
@@ -154,13 +146,12 @@ function renderTree(folders, container, side) {
       const rb = document.createElement("input");
       rb.type = "radio";
       rb.name = "dest-folder";
-      rb.value = String(f.id);
-      rb.dataset.accountId = f.accountId;
-      rb.checked = selectedDestId === String(f.id);
+      rb.value = f.key;
+      rb.checked = selectedDestKey === f.key;
 
       rb.addEventListener("click", (e) => {
         e.stopPropagation();
-        selectedDestId = String(f.id);
+        selectedDestKey = f.key;
         syncMoveButton();
       });
       row.appendChild(rb);
@@ -183,48 +174,62 @@ function renderTree(folders, container, side) {
 
 // ─── Select All / None ───────────────────────────────────────────────────────
 $btnSelectAll.addEventListener("click", () => {
-  sourceFolders.forEach((f) => selectedSourceIds.add(String(f.id)));
+  sourceFolders.forEach((f) => selectedSourceKeys.add(f.key));
   reRenderSourceChecks();
   syncMoveButton();
 });
 $btnSelectNone.addEventListener("click", () => {
-  selectedSourceIds.clear();
+  selectedSourceKeys.clear();
   reRenderSourceChecks();
   syncMoveButton();
 });
 
 function reRenderSourceChecks() {
   $sourceTree.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
-    cb.checked = selectedSourceIds.has(cb.value);
+    cb.checked = selectedSourceKeys.has(cb.value);
   });
-  $sourceCount.textContent = `${selectedSourceIds.size} selected`;
+  $sourceCount.textContent = `${selectedSourceKeys.size} selected`;
 }
 
 // ─── Move Button State ───────────────────────────────────────────────────────
 function syncMoveButton() {
-  $btnMove.disabled = selectedSourceIds.size === 0 || !selectedDestId;
+  $btnMove.disabled = selectedSourceKeys.size === 0 || !selectedDestKey;
 }
 
 // ─── Execute Move ─────────────────────────────────────────────────────────────
 $btnMove.addEventListener("click", async () => {
-  if (selectedSourceIds.size === 0 || !selectedDestId) return;
+  if (selectedSourceKeys.size === 0 || !selectedDestKey) return;
 
-  // Build source list from current selection
+  // Build source list
   const sources = [];
-  for (const id of selectedSourceIds) {
-    const folder = sourceFolders.find((f) => String(f.id) === id);
-    if (folder) sources.push({ id: folder.id, path: folder.path, accountId: folder.accountId });
+  for (const key of selectedSourceKeys) {
+    const folder = sourceFolders.find((f) => f.key === key);
+    if (folder) {
+      sources.push({
+        key: folder.key,
+        id: folder.id,
+        name: folder.name,
+        path: folder.path,
+        accountId: folder.accountId,
+      });
+    }
   }
 
-  // Find dest accountId
-  const destFolder = destFolders.find((f) => String(f.id) === selectedDestId);
-  const destination = { id: selectedDestId, accountId: destFolder ? destFolder.accountId : "" };
+  // Find dest folder
+  const destFolder = destFolders.find((f) => f.key === selectedDestKey);
+  const destination = {
+    key: selectedDestKey,
+    id: destFolder ? destFolder.id : null,
+    name: destFolder ? destFolder.name : "",
+    path: destFolder ? destFolder.path : "/",
+    accountId: destFolder ? destFolder.accountId : "",
+  };
 
   // Confirm
   const confirmMsg = `Move ${sources.length} folder(s) to "${destFolder ? destFolder.name : "selected destination"}"?\n\nThis will copy all messages, then delete the originals.`;
   if (!confirm(confirmMsg)) return;
 
-  // Disable UI and show progress
+  // Disable UI
   $btnMove.style.display = "none";
   $btnCancel.style.display = "inline-flex";
   $progressPanel.style.display = "";
@@ -257,10 +262,8 @@ messenger.runtime.onMessage.addListener((message) => {
 
 function updateProgress(p) {
   if (!p) return;
-
   $progressPanel.style.display = "";
 
-  // Badge
   const phaseLabels = {
     starting: "Starting…",
     processing: "Processing…",
@@ -270,24 +273,19 @@ function updateProgress(p) {
   };
   $progressBadge.textContent = phaseLabels[p.phase] || p.phase;
 
-  // Overall bar
   const overallPct = p.overallTotal > 0 ? (p.overallDone / p.overallTotal) * 100 : 0;
   $progressOverall.style.width = `${overallPct}%`;
   $progressOverallText.textContent = `${p.overallDone} / ${p.overallTotal}`;
 
-  // Folder bar
   const folderPct = p.total > 0 ? (p.copied / p.total) * 100 : 0;
   $progressFolder.style.width = `${folderPct}%`;
   $progressFolderText.textContent = `${p.copied} / ${p.total}`;
 
-  // Log
   $log.textContent = (p.log || []).join("\n");
   $log.parentElement.scrollTop = $log.parentElement.scrollHeight;
 
-  // Reset UI when finished
   if (p.phase === "done" || p.phase === "cancelled" || p.phase === "error") {
     resetUI();
-    // Refresh folder lists
     if ($sourceAccount.value) loadFolderTree($sourceAccount.value, "source");
     if ($destAccount.value) loadFolderTree($destAccount.value, "dest");
   }
@@ -298,12 +296,12 @@ function resetUI() {
   $btnCancel.style.display = "none";
   $sourceAccount.disabled = false;
   $destAccount.disabled = false;
-  selectedSourceIds.clear();
+  selectedSourceKeys.clear();
   $sourceCount.textContent = "0 selected";
   syncMoveButton();
 }
 
-// ─── Poll for Progress (tab reopen scenario) ─────────────────────────────────
+// ─── Poll for Progress (tab reopen) ──────────────────────────────────────────
 async function pollProgress() {
   const res = await messenger.runtime.sendMessage({ type: "get-progress" });
   if (res.ok && res.processing) {

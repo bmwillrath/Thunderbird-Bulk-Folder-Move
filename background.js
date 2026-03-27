@@ -1,15 +1,29 @@
 // ── Bulk Folder Move – Background Script ──
-// IMAP→IMAP same-server optimised. Resumable: re-running a migration merges
-// into existing folders and skips already-copied messages (Message-ID dedup).
+// IMAP→IMAP cross-account optimised. Resumable with Message-ID dedup.
+// Compatible with TB 115+ (no MailFolder.id) and TB 128+ (has MailFolder.id).
 
 // ─── State ────────────────────────────────────────────────────────────────────
 let isProcessing = false;
 let shouldCancel = false;
 let currentProgress = null;
-let processedFolderIds = new Set();
+let processedFolderKeys = new Set();
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// Generate a stable key for a folder — works on TB 115 (no .id) and TB 128+ (.id)
+function folderKey(folder) {
+  if (folder.id) return String(folder.id);
+  return folder.accountId + ":" + folder.path;
+}
+
+// Build a folder reference that works with TB 115+ APIs
+// TB 115: APIs accept {accountId, path} objects
+// TB 128+: APIs accept MailFolderId strings
+function folderRef(folder) {
+  if (folder.id) return folder.id;
+  return { accountId: folder.accountId, path: folder.path };
+}
 
 // ─── Open UI Tab on Toolbar Click ─────────────────────────────────────────────
 messenger.browserAction.onClicked.addListener(async () => {
@@ -54,13 +68,22 @@ async function handleGetFolders(accountId) {
     if (!account) return { ok: false, error: "Account not found" };
 
     const flatFolders = [];
-    const walk = (folders, depth, parentId) => {
+    const walk = (folders, depth, parentKey) => {
       for (const f of folders) {
+        const key = folderKey(f);
         flatFolders.push({
-          id: f.id, name: f.name, path: f.path,
-          type: f.type, accountId, depth, parentId,
+          key: key,
+          id: f.id || null,
+          name: f.name,
+          path: f.path,
+          type: f.type,
+          accountId: f.accountId || accountId,
+          depth,
+          parentKey,
         });
-        if (f.subFolders && f.subFolders.length) walk(f.subFolders, depth + 1, f.id);
+        if (f.subFolders && f.subFolders.length) {
+          walk(f.subFolders, depth + 1, key);
+        }
       }
     };
     walk(account.folders || [], 0, null);
@@ -70,12 +93,27 @@ async function handleGetFolders(accountId) {
   }
 }
 
-// ─── Resolve destination ID ───────────────────────────────────────────────────
+// ─── Resolve destination ──────────────────────────────────────────────────────
 function isAccountRoot(id) {
   return typeof id === "string" && id.startsWith("account:");
 }
-function resolveDestId(destId) {
-  return isAccountRoot(destId) ? destId.replace("account:", "") : destId;
+function resolveDestRef(dest) {
+  // dest has: key, accountId, path (and maybe id)
+  if (isAccountRoot(dest.key)) {
+    return dest.accountId;
+  }
+  if (dest.id) return dest.id;
+  return { accountId: dest.accountId, path: dest.path };
+}
+
+// ─── Safely get a folder ──────────────────────────────────────────────────────
+async function safeGetFolder(folder, includeSubFolders) {
+  try {
+    const ref = folder.id ? folder.id : { accountId: folder.accountId, path: folder.path };
+    return await messenger.folders.get(ref, includeSubFolders || false);
+  } catch (_e) {
+    return null;
+  }
 }
 
 // ─── Queue Orchestrator ───────────────────────────────────────────────────────
@@ -85,12 +123,18 @@ async function handleStartMove(sourceFolders, destination) {
 
   isProcessing = true;
   shouldCancel = false;
-  processedFolderIds = new Set();
+  processedFolderKeys = new Set();
   currentProgress = {
     phase: "starting", folder: "",
     copied: 0, total: 0,
     overallDone: 0, overallTotal: sourceFolders.length,
     log: [],
+    stats: {
+      foldersProcessed: 0, foldersSkipped: 0, foldersFailed: 0,
+      foldersDeleted: 0, foldersKept: 0,
+      messagesCopied: 0, messagesDuplicatesRemoved: 0, messagesFailed: 0,
+      nativeMoves: 0,
+    },
   };
 
   processQueue(sourceFolders, destination);
@@ -101,26 +145,10 @@ async function processQueue(sourceFolders, destination) {
   const log = (msg) => { currentProgress.log.push(msg); broadcast(); };
   const broadcast = () => {
     messenger.runtime.sendMessage({
-      type: "progress-update",
-      progress: { ...currentProgress },
+      type: "progress-update", progress: { ...currentProgress },
     }).catch(() => {});
   };
-
-  // Migration-wide stats
-  const stats = {
-    foldersProcessed: 0,
-    foldersSkipped: 0,
-    foldersFailed: 0,
-    foldersDeleted: 0,
-    foldersKept: 0,
-    messagesCopied: 0,
-    messagesDuplicatesRemoved: 0,
-    messagesFailed: 0,
-    nativeMoves: 0,
-  };
-
-  // Store stats on currentProgress so processSingleFolder can update them
-  currentProgress.stats = stats;
+  const stats = currentProgress.stats;
 
   try {
     for (let i = 0; i < sourceFolders.length; i++) {
@@ -128,7 +156,7 @@ async function processQueue(sourceFolders, destination) {
 
       const src = sourceFolders[i];
 
-      if (processedFolderIds.has(src.id)) {
+      if (processedFolderKeys.has(src.key)) {
         log(`⏭️ Skipping ${src.path} — already processed as a sub-folder.`);
         stats.foldersSkipped++;
         currentProgress.overallDone = i + 1;
@@ -136,7 +164,9 @@ async function processQueue(sourceFolders, destination) {
         continue;
       }
 
-      try { await messenger.folders.get(src.id, false); } catch (_e) {
+      // Check folder still exists
+      const exists = await safeGetFolder(src, false);
+      if (!exists) {
         log(`⏭️ Skipping ${src.path} — folder no longer exists.`);
         stats.foldersSkipped++;
         currentProgress.overallDone = i + 1;
@@ -161,7 +191,7 @@ async function processQueue(sourceFolders, destination) {
       }
     }
 
-    // ── Completion Summary ────────────────────────────────────────────────
+    // ── Completion Summary ──────────────────────────────────────────────
     log(``);
     log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
     if (shouldCancel) {
@@ -204,38 +234,33 @@ async function processQueue(sourceFolders, destination) {
 
 // ─── Process a Single Folder ──────────────────────────────────────────────────
 async function processSingleFolder(src, destination, log, broadcast) {
-  processedFolderIds.add(src.id);
   const stats = currentProgress.stats;
+  processedFolderKeys.add(src.key);
 
-  // Pre-mark sub-folders so they don't get double-processed
-  try {
-    const srcWithSubs = await messenger.folders.get(src.id, true);
+  // Pre-mark sub-folders
+  const srcWithSubs = await safeGetFolder(src, true);
+  if (srcWithSubs && srcWithSubs.subFolders) {
     const markSubs = (folders) => {
       for (const f of folders) {
-        processedFolderIds.add(f.id);
+        processedFolderKeys.add(folderKey(f));
         if (f.subFolders && f.subFolders.length) markSubs(f.subFolders);
       }
     };
-    if (srcWithSubs.subFolders) markSubs(srcWithSubs.subFolders);
-  } catch (_e) {}
+    markSubs(srcWithSubs.subFolders);
+  }
 
-  const destRef = resolveDestId(destination.id);
+  const destRef = resolveDestRef(destination);
 
   // ── Strategy 1: Native folders.move() ────────────────────────────────────
-  // Only works within the same account (IMAP RENAME). Cross-account moves
-  // require copy-then-delete, so we skip straight to merge-copy.
   const sameAccount = src.accountId === destination.accountId;
-
   if (sameAccount) {
     log(`   🚀 Attempting native folder move…`);
     try {
-      const movedFolder = await messenger.folders.move(src.id, destRef);
+      const srcRef = folderRef(src);
+      const movedFolder = await messenger.folders.move(srcRef, destRef);
+      const sourceGone = !(await safeGetFolder(src, false));
 
-      // Verify move succeeded — folders.move() can return null on some setups
-      let sourceStillExists = false;
-      try { await messenger.folders.get(src.id, false); sourceStillExists = true; } catch (_e) {}
-
-      if (!sourceStillExists) {
+      if (sourceGone) {
         const displayPath = movedFolder ? movedFolder.path : "(moved)";
         log(`   ✅ Native move succeeded → ${displayPath}`);
         stats.nativeMoves++;
@@ -257,24 +282,20 @@ async function processSingleFolder(src, destination, log, broadcast) {
   }
 
   stats.foldersProcessed++;
-  log(`   🔄 Using merge-copy mode (cross-account)…`);
+  log(`   🔄 Using merge-copy mode…`);
 
-  // ── Strategy 2: Merge-copy (resumable) ───────────────────────────────────
-  // Creates destination if needed, copies only NEW messages (dedup by
-  // Message-ID), then cleans up the source.
-
-  const srcFolder = await messenger.folders.get(src.id, false);
+  const srcFolder = await safeGetFolder(src, false);
+  if (!srcFolder) throw new Error("Source folder disappeared");
   const folderName = srcFolder.name;
 
-  // 2a. Find or create destination folder
-  let destFolder = await findExistingFolder(destRef, folderName, destination.id);
+  // Find or create destination folder
+  let destFolder = await findExistingSubFolder(destRef, folderName, destination);
   if (destFolder) {
     log(`   📁 Destination folder already exists: ${folderName} (merge mode)`);
   } else {
     try {
       destFolder = await messenger.folders.create(destRef, folderName);
       log(`   📁 Created destination folder: ${folderName}`);
-      // Wait for IMAP to register the new folder
       log(`   ⏳ Waiting 5s for IMAP sync…`);
       await sleep(5000);
     } catch (createErr) {
@@ -282,17 +303,19 @@ async function processSingleFolder(src, destination, log, broadcast) {
     }
   }
 
-  // 2b. Collect source messages
-  const sourceMessages = await collectMessages(src.id);
+  // Collect source messages
+  const srcListRef = folderRef(src);
+  const sourceMessages = await collectMessages(srcListRef);
+
   if (sourceMessages.length === 0) {
     log(`   📧 No messages to process`);
   } else {
-    // 2c. Collect existing Message-IDs in destination for dedup
+    // Dedup against destination
     log(`   🔍 Checking destination for existing messages…`);
-    const destMessageIds = await collectMessageIds(destFolder.id);
+    const destListRef = folderRef(destFolder);
+    const destMessageIds = await collectMessageIds(destListRef);
     log(`   📊 Destination has ${destMessageIds.size} existing message(s)`);
 
-    // 2d. Filter to only new messages
     const newMessages = sourceMessages.filter(
       (m) => !destMessageIds.has(m.headerMessageId)
     );
@@ -300,9 +323,9 @@ async function processSingleFolder(src, destination, log, broadcast) {
       (m) => destMessageIds.has(m.headerMessageId)
     );
 
-    // Delete duplicates from source — they're confirmed in the destination
+    // Delete duplicates from source
     if (dupeMessages.length > 0) {
-      log(`   🧹 Deleting ${dupeMessages.length} duplicate(s) from source (already in destination)…`);
+      log(`   🧹 Deleting ${dupeMessages.length} duplicate(s) from source…`);
       const dupeIds = dupeMessages.map((m) => m.id);
       for (let i = 0; i < dupeIds.length; i += 10) {
         const batch = dupeIds.slice(i, i + 10);
@@ -326,9 +349,10 @@ async function processSingleFolder(src, destination, log, broadcast) {
     log(`   📧 ${totalNew} new message(s) to copy`);
     broadcast();
 
-    // 2e. Copy new messages in batches
+    // Copy in batches
     const BATCH_SIZE = 10;
     const MAX_RETRIES = 3;
+    const destCopyRef = folderRef(destFolder);
 
     for (let i = 0; i < newMessages.length; i += BATCH_SIZE) {
       if (shouldCancel) return;
@@ -336,10 +360,9 @@ async function processSingleFolder(src, destination, log, broadcast) {
       const batchIds = batch.map((m) => m.id);
       let batchCopied = false;
 
-      // Try batch copy with retries
       for (let attempt = 1; attempt <= MAX_RETRIES && !batchCopied; attempt++) {
         try {
-          await messenger.messages.copy(batchIds, destFolder.id);
+          await messenger.messages.copy(batchIds, destCopyRef);
           batchCopied = true;
         } catch (err) {
           log(`   ⚠️ Batch copy attempt ${attempt}/${MAX_RETRIES} failed: ${err.message}`);
@@ -348,7 +371,6 @@ async function processSingleFolder(src, destination, log, broadcast) {
       }
 
       if (batchCopied) {
-        // Delete originals
         try {
           await messenger.messages.delete(batchIds, { deletePermanently: true });
         } catch (delErr) {
@@ -365,19 +387,19 @@ async function processSingleFolder(src, destination, log, broadcast) {
         continue;
       }
 
-      // Per-message fallback with getRaw+import
+      // Per-message fallback
       log(`   🔄 Falling back to per-message transfer…`);
       for (const msg of batch) {
         if (shouldCancel) return;
         let msgCopied = false;
 
         try {
-          await messenger.messages.copy([msg.id], destFolder.id);
+          await messenger.messages.copy([msg.id], destCopyRef);
           msgCopied = true;
         } catch (_e) {
           try {
             const rawFile = await messenger.messages.getRaw(msg.id, { data_format: "File" });
-            await messenger.messages.import(rawFile, destFolder.id);
+            await messenger.messages.import(rawFile, destCopyRef);
             msgCopied = true;
             log(`   📨 Message ${msg.id} imported via raw fallback`);
           } catch (importErr) {
@@ -406,22 +428,30 @@ async function processSingleFolder(src, destination, log, broadcast) {
     }
   }
 
-  // 2f. Recursively handle sub-folders (merge-capable)
-  const srcWithSubs = await messenger.folders.get(src.id, true);
-  if (srcWithSubs.subFolders && srcWithSubs.subFolders.length > 0) {
-    for (const sub of srcWithSubs.subFolders) {
+  // Recursively handle sub-folders
+  const srcRefresh = await safeGetFolder(src, true);
+  if (srcRefresh && srcRefresh.subFolders && srcRefresh.subFolders.length > 0) {
+    for (const sub of srcRefresh.subFolders) {
       if (shouldCancel) return;
       log(`   ↳ Processing sub-folder: ${sub.name}`);
       await processSingleFolder(
-        { id: sub.id, path: `${src.path}/${sub.name}`, accountId: src.accountId },
-        { id: destFolder.id, accountId: destination.accountId },
+        {
+          key: folderKey(sub), id: sub.id || null,
+          name: sub.name, path: sub.path,
+          accountId: sub.accountId || src.accountId,
+        },
+        {
+          key: folderKey(destFolder), id: destFolder.id || null,
+          name: destFolder.name, path: destFolder.path,
+          accountId: destFolder.accountId || destination.accountId,
+        },
         log, broadcast
       );
     }
   }
 
-  // 2g. Delete source folder only if fully emptied
-  const remainingCount = await countMessages(src.id);
+  // Delete source folder if empty
+  const remainingCount = await countMessages(folderRef(src));
   if (remainingCount > 0) {
     log(`   ⚠️ Source folder "${folderName}" kept — ${remainingCount} message(s) remain.`);
     stats.foldersKept++;
@@ -429,10 +459,11 @@ async function processSingleFolder(src, destination, log, broadcast) {
   }
 
   let deleted = false;
+  const srcDelRef = folderRef(src);
   for (let attempt = 1; attempt <= 3 && !deleted; attempt++) {
     try {
       await sleep(2000);
-      await messenger.folders.delete(src.id);
+      await messenger.folders.delete(srcDelRef);
       log(`   🗑️ Removed source folder: ${folderName}`);
       stats.foldersDeleted++;
       deleted = true;
@@ -450,15 +481,15 @@ async function processSingleFolder(src, destination, log, broadcast) {
 
 // ─── Utility Functions ────────────────────────────────────────────────────────
 
-// Find an existing folder by name under a parent (folder or account root)
-async function findExistingFolder(destRef, folderName, rawDestId) {
+async function findExistingSubFolder(destRef, folderName, destination) {
   try {
     let subs;
-    if (isAccountRoot(rawDestId)) {
-      const acct = await messenger.accounts.get(destRef, true);
+    if (isAccountRoot(destination.key)) {
+      const acct = await messenger.accounts.get(destination.accountId, true);
       subs = acct ? acct.folders : [];
     } else {
-      const parent = await messenger.folders.get(destRef, true);
+      const ref = destination.id ? destination.id : { accountId: destination.accountId, path: destination.path };
+      const parent = await messenger.folders.get(ref, true);
       subs = parent.subFolders || [];
     }
     return subs.find((f) => f.name === folderName) || null;
@@ -467,11 +498,10 @@ async function findExistingFolder(destRef, folderName, rawDestId) {
   }
 }
 
-// Collect all messages (with headers) from a folder
-async function collectMessages(folderId) {
+async function collectMessages(ref) {
   const messages = [];
   try {
-    let page = await messenger.messages.list(folderId);
+    let page = await messenger.messages.list(ref);
     messages.push(...page.messages);
     while (page.id) {
       page = await messenger.messages.continueList(page.id);
@@ -481,11 +511,10 @@ async function collectMessages(folderId) {
   return messages;
 }
 
-// Collect all Message-ID headers from a folder into a Set
-async function collectMessageIds(folderId) {
+async function collectMessageIds(ref) {
   const ids = new Set();
   try {
-    let page = await messenger.messages.list(folderId);
+    let page = await messenger.messages.list(ref);
     for (const m of page.messages) {
       if (m.headerMessageId) ids.add(m.headerMessageId);
     }
@@ -499,11 +528,10 @@ async function collectMessageIds(folderId) {
   return ids;
 }
 
-// Count messages in a folder
-async function countMessages(folderId) {
+async function countMessages(ref) {
   let count = 0;
   try {
-    let page = await messenger.messages.list(folderId);
+    let page = await messenger.messages.list(ref);
     count += page.messages.length;
     while (page.id) {
       page = await messenger.messages.continueList(page.id);
