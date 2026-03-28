@@ -12,6 +12,8 @@ const $btnSelectAll   = document.getElementById("btn-select-all");
 const $btnSelectNone  = document.getElementById("btn-select-none");
 const $btnMove        = document.getElementById("btn-move");
 const $btnCancel      = document.getElementById("btn-cancel");
+const $btnSkipMsg     = document.getElementById("btn-skip-msg");
+const $btnSkipFolder  = document.getElementById("btn-skip-folder");
 const $progressPanel  = document.getElementById("progress-panel");
 const $progressBadge  = document.getElementById("progress-badge");
 const $progressOverall     = document.getElementById("progress-overall");
@@ -317,6 +319,8 @@ $btnMove.addEventListener("click", async () => {
 
   // Disable UI
   $btnMove.style.display = "none";
+  $btnSkipMsg.style.display = "inline-flex";
+  $btnSkipFolder.style.display = "inline-flex";
   $btnCancel.style.display = "inline-flex";
   $progressPanel.style.display = "";
   $log.textContent = "";
@@ -334,7 +338,15 @@ $btnMove.addEventListener("click", async () => {
   }
 });
 
-// ─── Cancel ───────────────────────────────────────────────────────────────────
+// ─── Control Actions (Skip & Cancel) ──────────────────────────────────────────
+$btnSkipMsg.addEventListener("click", async () => {
+  await messenger.runtime.sendMessage({ type: "skip-message" });
+});
+
+$btnSkipFolder.addEventListener("click", async () => {
+  await messenger.runtime.sendMessage({ type: "skip-folder" });
+});
+
 $btnCancel.addEventListener("click", async () => {
   await messenger.runtime.sendMessage({ type: "cancel" });
 });
@@ -379,6 +391,8 @@ function updateProgress(p) {
 
 function resetUI() {
   $btnMove.style.display = "inline-flex";
+  $btnSkipMsg.style.display = "none";
+  $btnSkipFolder.style.display = "none";
   $btnCancel.style.display = "none";
   $sourceAccount.disabled = false;
   $destAccount.disabled = false;
@@ -392,6 +406,8 @@ async function pollProgress() {
   const res = await messenger.runtime.sendMessage({ type: "get-progress" });
   if (res.ok && res.processing) {
     $btnMove.style.display = "none";
+    $btnSkipMsg.style.display = "inline-flex";
+    $btnSkipFolder.style.display = "inline-flex";
     $btnCancel.style.display = "inline-flex";
     $sourceAccount.disabled = true;
     $destAccount.disabled = true;

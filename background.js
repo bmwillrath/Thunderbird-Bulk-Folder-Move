@@ -13,6 +13,10 @@ let isProcessing = false;
 let shouldCancel = false;
 let currentProgress = null;
 let processedFolderKeys = new Set();
+let skipCurrentFolderRequested = false;
+let skipCurrentMessageRequested = false;
+let foldersCompletedCount = 0;
+let currentSkipReject = null;
 
 // ─── API Detection ────────────────────────────────────────────────────────────
 const HAS_FOLDER_GET = typeof messenger.folders.get === "function";
@@ -22,12 +26,35 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // Timeout wrapper — rejects if promise doesn't resolve within ms
 function withTimeout(promise, ms, label) {
-  return Promise.race([
-    promise,
-    new Promise((_, reject) =>
-      setTimeout(() => reject(new Error(`Timed out after ${ms / 1000}s: ${label}`)), ms)
-    ),
-  ]);
+  return new Promise((resolve, reject) => {
+    let timeoutId;
+    
+    // Register global skip handler for this promise
+    const onSkip = (reason) => {
+      clearTimeout(timeoutId);
+      currentSkipReject = null;
+      reject(new Error(reason || "Skipped by user"));
+    };
+    currentSkipReject = onSkip;
+
+    timeoutId = setTimeout(() => {
+      if (currentSkipReject === onSkip) currentSkipReject = null;
+      reject(new Error(`Timed out after ${ms / 1000}s: ${label}`));
+    }, ms);
+
+    promise.then(
+      (res) => {
+        clearTimeout(timeoutId);
+        if (currentSkipReject === onSkip) currentSkipReject = null;
+        resolve(res);
+      },
+      (err) => {
+        clearTimeout(timeoutId);
+        if (currentSkipReject === onSkip) currentSkipReject = null;
+        reject(err);
+      }
+    );
+  });
 }
 
 // Timeout wrapper with progress logging — emits a heartbeat every intervalMs
@@ -39,12 +66,7 @@ function withTimeoutProgress(promise, ms, label, logFn, intervalMs = 120000) {
       if (logFn) logFn(`   ⏳ Still processing: ${label}... (${elapsed / 1000}s elapsed, awaiting server)`);
     }, intervalMs);
 
-    Promise.race([
-      promise,
-      new Promise((_, rejectTimeout) =>
-        setTimeout(() => rejectTimeout(new Error(`Timed out after ${ms / 1000}s: ${label}`)), ms)
-      ),
-    ]).then(
+    withTimeout(promise, ms, label).then(
       (result) => {
         clearInterval(intervalId);
         resolve(result);
@@ -148,6 +170,14 @@ messenger.runtime.onMessage.addListener(async (message, _sender) => {
     case "cancel":
       shouldCancel = true;
       return { ok: true };
+    case "skip-folder":
+      skipCurrentFolderRequested = true;
+      if (currentSkipReject) currentSkipReject("Folder skipped by user");
+      return { ok: true };
+    case "skip-message":
+      skipCurrentMessageRequested = true;
+      if (currentSkipReject) currentSkipReject("Message skipped by user");
+      return { ok: true };
     case "get-progress":
       return { ok: true, progress: currentProgress, processing: isProcessing };
     default:
@@ -205,6 +235,9 @@ async function handleStartMove(sourceFolders, destination) {
 
   isProcessing = true;
   shouldCancel = false;
+  skipCurrentFolderRequested = false;
+  skipCurrentMessageRequested = false;
+  foldersCompletedCount = 0;
   processedFolderKeys = new Set();
   currentProgress = {
     phase: "starting", folder: "",
@@ -240,8 +273,6 @@ async function processQueue(sourceFolders, destination) {
       if (processedFolderKeys.has(src.key)) {
         log(`⏭️ Skipping ${src.path} — already processed as a sub-folder.`);
         stats.foldersSkipped++;
-        currentProgress.overallDone = i + 1;
-        broadcast();
         continue;
       }
 
@@ -249,13 +280,12 @@ async function processQueue(sourceFolders, destination) {
       const realFolder = await lookupFolder(src.accountId, src.path, false);
       if (!realFolder) {
         log(`⏭️ Skipping ${src.path} — folder no longer exists.`);
-        stats.foldersSkipped++;
-        currentProgress.overallDone = i + 1;
+        foldersCompletedCount++;
+        currentProgress.overallDone = foldersCompletedCount;
         broadcast();
         continue;
       }
 
-      currentProgress.overallDone = i;
       currentProgress.phase = "processing";
       currentProgress.folder = src.path;
       log(`📂 Processing folder: ${src.path}`);
@@ -371,6 +401,11 @@ async function processSingleFolder(src, destination, log, broadcast) {
         log(`   ⚠️ Native move didn't complete, using merge-copy…`);
       }
     } catch (moveErr) {
+      if (moveErr.message === "Folder skipped by user") {
+         log(`   ⏭️ Native move skipped by user. Skipping folder entirely…`);
+         skipCurrentFolderRequested = false; // consume
+         return;
+      }
       const isTimeout = moveErr.message && moveErr.message.includes("Timed out");
       if (isTimeout) {
         log(`   ⚠️ Native move timed out. Waiting 10s for server to settle before merge-copy…`);
@@ -501,6 +536,7 @@ async function processSingleFolder(src, destination, log, broadcast) {
 
     for (let i = 0; i < newMessages.length; i += BATCH_SIZE) {
       if (shouldCancel) return;
+      if (skipCurrentFolderRequested) break;
       const batch = newMessages.slice(i, i + BATCH_SIZE);
       const batchIds = batch.map((m) => m.id);
       let batchCopied = false;
@@ -516,8 +552,20 @@ async function processSingleFolder(src, destination, log, broadcast) {
         await withTimeoutProgress(messenger.messages.copy(batchIds, destSubFolder), batchTimeout, "messages.copy batch", log);
         batchCopied = true;
       } catch (err) {
-        log(`   ⚠️ Batch copy failed (${err.message}). Instant fallback to per-message…`);
+        if (err.message === "Folder skipped by user") {
+           skipCurrentFolderRequested = true;
+        } else if (err.message === "Message skipped by user") {
+           skipCurrentMessageRequested = false;
+           skippedMessages += batch.length;
+           stats.messagesFailed += batch.length;
+           log(`   ⏭️ Skipped batch by user request`);
+           continue;
+        } else {
+           log(`   ⚠️ Batch copy failed (${err.message}). Instant fallback to per-message…`);
+        }
       }
+
+      if (skipCurrentFolderRequested) break;
 
       if (batchCopied) {
         try {
@@ -571,6 +619,7 @@ async function processSingleFolder(src, destination, log, broadcast) {
 
       for (const msg of remainingBatch) {
         if (shouldCancel) return;
+        if (skipCurrentFolderRequested) break;
         let msgCopied = false;
         const msgTimeout = calcMessageTimeout(msg);
         const msgTimeoutSec = Math.round(msgTimeout / 1000);
@@ -583,6 +632,16 @@ async function processSingleFolder(src, destination, log, broadcast) {
           await withTimeoutProgress(messenger.messages.copy([msg.id], destSubFolder), msgTimeout, "messages.copy single", log);
           msgCopied = true;
         } catch (copyErr) {
+          if (copyErr.message === "Folder skipped by user") {
+             skipCurrentFolderRequested = true;
+             break;
+          } else if (copyErr.message === "Message skipped by user" || skipCurrentMessageRequested) {
+             skipCurrentMessageRequested = false;
+             skippedMessages++;
+             stats.messagesFailed++;
+             log(`   ⏭️ Skipped message ${msg.id} by user request`);
+             continue; // to next msg
+          }
           if (copyErr.message && copyErr.message.includes("already contains")) {
             log(`   ✅ Message ${msg.id} already in destination — cleaning source`);
             msgCopied = true;
@@ -602,6 +661,11 @@ async function processSingleFolder(src, destination, log, broadcast) {
               
               for (let r = 0; r < RAMP_DELAYS.length && !msgCopied; r++) {
                 if (shouldCancel) return;
+                if (skipCurrentFolderRequested) break;
+                if (skipCurrentMessageRequested) {
+                   skipCurrentMessageRequested = false;
+                   break;
+                }
                 const waitSec = RAMP_DELAYS[r] / 1000;
                 log(`   ⏳ Throttling recovery: Waiting ${waitSec}s before retry (attempt ${r + 1}/${RAMP_DELAYS.length})…`);
                 await sleep(RAMP_DELAYS[r]);
@@ -611,15 +675,32 @@ async function processSingleFolder(src, destination, log, broadcast) {
                   msgCopied = true;
                   log(`   ✅ Message ${msg.id} successfully copied after throttling recovery.`);
                 } catch (retryErr) {
+                  if (retryErr.message === "Folder skipped by user") {
+                     skipCurrentFolderRequested = true; 
+                     break;
+                  }
+                  if (retryErr.message === "Message skipped by user") {
+                     skipCurrentMessageRequested = false;
+                     break; 
+                  }
                   if (retryErr.message && retryErr.message.includes("already contains")) {
                      msgCopied = true;
                   }
                 }
               }
+              
+              if (skipCurrentFolderRequested) break;
+              if (skipCurrentMessageRequested) {
+                 skipCurrentMessageRequested = false;
+                 skippedMessages++;
+                 stats.messagesFailed++;
+                 log(`   ⏭️ Skipped message ${msg.id} during retry`);
+                 continue; // to next msg
+              }
             }
 
             // Raw Fallback if STILL failed
-            if (!msgCopied) {
+            if (!msgCopied && !skipCurrentFolderRequested) {
               log(`   🔄 Standard copy failed or timed out. Attempting RAW import fallback for message ${msg.id}…`);
               try {
                 const rawFile = await withTimeoutProgress(messenger.messages.getRaw(msg.id, { data_format: "File" }), msgTimeout, "messages.getRaw", log);
@@ -627,12 +708,21 @@ async function processSingleFolder(src, destination, log, broadcast) {
                 msgCopied = true;
                 log(`   📨 Message ${msg.id} imported via raw fallback`);
               } catch (importErr) {
-                if (importErr.message && importErr.message.includes("already contains")) {
-                  msgCopied = true;
-                } else {
-                  skippedMessages++;
-                  stats.messagesFailed++;
-                  log(`   ❌ Permanent failure on message ${msg.id}: ${importErr.message}`);
+                if (importErr.message === "Folder skipped by user") {
+                   skipCurrentFolderRequested = true;
+                } else if (importErr.message === "Message skipped by user" || skipCurrentMessageRequested) {
+                   skipCurrentMessageRequested = false;
+                } 
+                
+                if (!msgCopied && !skipCurrentFolderRequested) {
+                   if (importErr.message && importErr.message.includes("already contains")) {
+                     msgCopied = true;
+                   } else {
+                     skippedMessages++;
+                     stats.messagesFailed++;
+                     const subjInfo = msg.subject ? ` (Subject: "${msg.subject}")` : "";
+                     log(`   ❌ Permanent failure on message ${msg.id}${subjInfo}: ${importErr.message}`);
+                   }
                 }
               }
             }
@@ -655,10 +745,21 @@ async function processSingleFolder(src, destination, log, broadcast) {
       broadcast();
     }
 
+    if (skipCurrentFolderRequested) {
+       log(`   ⏭️ Skipping remaining messages in folder "${folderName}"`);
+       skipCurrentFolderRequested = false; // consume it
+    }
+
     if (skippedMessages > 0) {
       log(`   ⚠️ ${skippedMessages} message(s) could not be copied and remain in source.`);
     }
   }
+
+  foldersCompletedCount++;
+  // We cap at overallTotal, or update overallTotal if it was exceeded. Usually capped is fine.
+  currentProgress.overallTotal = Math.max(currentProgress.overallTotal, foldersCompletedCount);
+  currentProgress.overallDone = foldersCompletedCount;
+  broadcast();
 
   // Recursively handle sub-folders
   // Re-fetch source to get current sub-folders
