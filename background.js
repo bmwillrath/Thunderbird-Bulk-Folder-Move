@@ -378,8 +378,11 @@ async function processSingleFolder(src, destination, log, broadcast) {
   stats.foldersProcessed++;
   log(`   🔄 Using merge-copy mode…`);
 
-  const folderName = realSrc.name;
-
+  let folderName = realSrc.name;
+  
+  // Sanitize illegal characters for Exchange Online / IMAP
+  // Exchange forbids: < > : " / \ | ? *
+  folderName = folderName.replace(/[<>:"/\\|?*]/g, '-').trim();
   // Find or create destination sub-folder
   let destSubFolder = null;
 
