@@ -25,12 +25,12 @@ function withTimeout(promise, ms, label) {
 }
 
 // Timeout wrapper with progress logging — emits a heartbeat every intervalMs
-function withTimeoutProgress(promise, ms, label, intervalMs = 120000) {
+function withTimeoutProgress(promise, ms, label, logFn, intervalMs = 120000) {
   return new Promise((resolve, reject) => {
     let elapsed = 0;
     const intervalId = setInterval(() => {
       elapsed += intervalMs;
-      log(`   ⏳ Still processing: ${label}... (${elapsed / 1000}s elapsed, awaiting server)`);
+      if (logFn) logFn(`   ⏳ Still processing: ${label}... (${elapsed / 1000}s elapsed, awaiting server)`);
     }, intervalMs);
 
     Promise.race([
@@ -493,7 +493,7 @@ async function processSingleFolder(src, destination, log, broadcast) {
       broadcast();
 
       try {
-        await withTimeoutProgress(messenger.messages.copy(batchIds, destSubFolder), batchTimeout, "messages.copy batch");
+        await withTimeoutProgress(messenger.messages.copy(batchIds, destSubFolder), batchTimeout, "messages.copy batch", log);
         batchCopied = true;
       } catch (err) {
         log(`   ⚠️ Batch copy failed (${err.message}). Instant fallback to per-message…`);
@@ -560,7 +560,7 @@ async function processSingleFolder(src, destination, log, broadcast) {
         broadcast();
 
         try {
-          await withTimeoutProgress(messenger.messages.copy([msg.id], destSubFolder), msgTimeout, "messages.copy single");
+          await withTimeoutProgress(messenger.messages.copy([msg.id], destSubFolder), msgTimeout, "messages.copy single", log);
           msgCopied = true;
         } catch (copyErr) {
           if (copyErr.message && copyErr.message.includes("already contains")) {
@@ -587,7 +587,7 @@ async function processSingleFolder(src, destination, log, broadcast) {
                 await sleep(RAMP_DELAYS[r]);
 
                 try {
-                  await withTimeoutProgress(messenger.messages.copy([msg.id], destSubFolder), msgTimeout, `messages.copy single retry`);
+                  await withTimeoutProgress(messenger.messages.copy([msg.id], destSubFolder), msgTimeout, `messages.copy single retry`, log);
                   msgCopied = true;
                   log(`   ✅ Message ${msg.id} successfully copied after throttling recovery.`);
                 } catch (retryErr) {
@@ -602,8 +602,8 @@ async function processSingleFolder(src, destination, log, broadcast) {
             if (!msgCopied) {
               log(`   🔄 Standard copy failed or timed out. Attempting RAW import fallback for message ${msg.id}…`);
               try {
-                const rawFile = await withTimeoutProgress(messenger.messages.getRaw(msg.id, { data_format: "File" }), msgTimeout, "messages.getRaw");
-                await withTimeoutProgress(messenger.messages.import(rawFile, destSubFolder), msgTimeout, "messages.import");
+                const rawFile = await withTimeoutProgress(messenger.messages.getRaw(msg.id, { data_format: "File" }), msgTimeout, "messages.getRaw", log);
+                await withTimeoutProgress(messenger.messages.import(rawFile, destSubFolder), msgTimeout, "messages.import", log);
                 msgCopied = true;
                 log(`   📨 Message ${msg.id} imported via raw fallback`);
               } catch (importErr) {
