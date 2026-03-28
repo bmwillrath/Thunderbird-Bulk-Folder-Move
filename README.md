@@ -58,6 +58,3 @@ Zip the contents of this repository and rename the extension to `.xpi`.
 ```bash
 zip -r /tmp/bulk-folder-move.xpi * -x "*.git*" ".DS_Store"
 ```
-
----
-*Created by BTE*
