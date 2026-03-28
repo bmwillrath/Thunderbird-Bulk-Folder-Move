@@ -271,8 +271,7 @@ async function processQueue(sourceFolders, destination) {
       const src = sourceFolders[i];
 
       if (processedFolderKeys.has(src.key)) {
-        log(`⏭️ Skipping ${src.path} — already processed as a sub-folder.`);
-        stats.foldersSkipped++;
+        // Silently skip. The folder was already processed recursively.
         continue;
       }
 
