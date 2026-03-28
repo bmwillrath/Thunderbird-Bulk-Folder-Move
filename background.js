@@ -1,7 +1,13 @@
 // ── Bulk Folder Move – Background Script ──
-// Compatible with TB 115+ (no folders.get, no MailFolder.id) and TB 121+.
+// *** CRITICAL ARCHITECTURAL CONSTRAINT ***
+// Do not attempt to clear the Error Console deprecation warnings by refactoring
+// "MailFolder" objects into "MailFolderId" strings for APIs like folders.create() 
+// or messages.list(). This script enforces strict backward compatibility for older
+// Thunderbird clients running on Windows 7, which CANNOT parse the modern ID format.
+// Always pass the raw, full MailFolder object to ensure cross-platform runtime safety.
+// 
+// Compatible with TB 115+ and TB 121+.
 // Uses account tree walking to find real MailFolder objects on older TB versions.
-
 // ─── State ────────────────────────────────────────────────────────────────────
 let isProcessing = false;
 let shouldCancel = false;
