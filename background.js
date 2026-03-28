@@ -475,8 +475,7 @@ async function processSingleFolder(src, destination, log, broadcast) {
 
     function calcMessageTimeout(msg) {
       const mb = (msg.size || 0) / (1024 * 1024);
-      const extraMB = Math.max(0, mb - 37.5);
-      return Math.min(300000 + Math.ceil(extraMB / 7.5) * 60000, 900000);
+      return Math.min(60000 + (mb * 10000), 900000);
     }
 
     for (let i = 0; i < newMessages.length; i += BATCH_SIZE) {
@@ -715,10 +714,10 @@ async function processSingleFolder(src, destination, log, broadcast) {
 async function collectMessages(mailFolder) {
   const messages = [];
   let page = await withTimeout(messenger.messages.list(mailFolder), 60000, "messages.list");
-  messages.push(...page.messages);
+  messages.push(...page.messages.filter(m => m.size > 0));
   while (page.id) {
     page = await withTimeout(messenger.messages.continueList(page.id), 60000, "messages.continueList");
-    messages.push(...page.messages);
+    messages.push(...page.messages.filter(m => m.size > 0));
   }
   return messages;
 }
