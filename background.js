@@ -51,7 +51,12 @@ function withTimeout(promise, ms, label) {
       (err) => {
         clearTimeout(timeoutId);
         if (currentSkipReject === onSkip) currentSkipReject = null;
-        reject(err);
+        let normalizedErr = err;
+        if (!(err instanceof Error)) {
+          const msg = err && err.message ? err.message : (typeof err === 'object' ? JSON.stringify(err) : String(err));
+          normalizedErr = new Error(msg);
+        }
+        reject(normalizedErr);
       }
     );
   });
@@ -166,7 +171,7 @@ messenger.runtime.onMessage.addListener(async (message, _sender) => {
     case "get-folders":
       return handleGetFolders(message.accountId);
     case "start-move":
-      return handleStartMove(message.sourceFolders, message.destination);
+      return handleStartMove(message.sourceFolders, message.destination, message.settings);
     case "cancel":
       shouldCancel = true;
       return { ok: true };
@@ -229,7 +234,7 @@ async function handleGetFolders(accountId) {
 }
 
 // ─── Queue Orchestrator ───────────────────────────────────────────────────────
-async function handleStartMove(sourceFolders, destination) {
+async function handleStartMove(sourceFolders, destination, settings) {
   if (isProcessing)
     return { ok: false, error: "A move operation is already in progress." };
 
@@ -240,6 +245,7 @@ async function handleStartMove(sourceFolders, destination) {
   foldersCompletedCount = 0;
   processedFolderKeys = new Set();
   currentProgress = {
+    settings: settings || { maxSizeMb: 25 },
     phase: "starting", folder: "",
     copied: 0, total: 0,
     overallDone: 0, overallTotal: sourceFolders.length,
@@ -248,7 +254,7 @@ async function handleStartMove(sourceFolders, destination) {
       foldersProcessed: 0, foldersSkipped: 0, foldersFailed: 0,
       foldersDeleted: 0, foldersKept: 0,
       messagesCopied: 0, messagesDuplicatesRemoved: 0, messagesFailed: 0,
-      nativeMoves: 0,
+      messagesSkippedSizeLimit: 0, nativeMoves: 0,
     },
   };
 
@@ -297,7 +303,8 @@ async function processQueue(sourceFolders, destination) {
         log(`✅ Finished: ${src.path}`);
       } catch (err) {
         stats.foldersFailed++;
-        log(`❌ Error processing ${src.path}: ${err.message}`);
+        const msg = err && err.message ? err.message : String(err);
+        log(`❌ Error processing ${src.path}: ${msg}`);
       }
     }
 
@@ -326,6 +333,8 @@ async function processQueue(sourceFolders, destination) {
     log(`   Messages copied:         ${stats.messagesCopied}`);
     if (stats.messagesDuplicatesRemoved > 0)
       log(`   ├─ Duplicates cleaned:   ${stats.messagesDuplicatesRemoved}`);
+    if (stats.messagesSkippedSizeLimit > 0)
+      log(`   ├─ Skipped (too large):  ${stats.messagesSkippedSizeLimit}`);
     if (stats.messagesFailed > 0)
       log(`   └─ Failed to copy:       ${stats.messagesFailed}`);
     log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
@@ -335,7 +344,8 @@ async function processQueue(sourceFolders, destination) {
     broadcast();
   } catch (err) {
     currentProgress.phase = "error";
-    log(`❌ Fatal error: ${err.message}`);
+    const msg = err && err.message ? err.message : String(err);
+    log(`❌ Fatal error: ${msg}`);
     broadcast();
   } finally {
     isProcessing = false;
@@ -451,9 +461,15 @@ async function processSingleFolder(src, destination, log, broadcast) {
       if (isAcctRoot) {
         const acct = await withTimeout(messenger.accounts.get(destination.accountId, true), 15000, "accounts.get");
         destSubFolder = (acct.folders || []).find((f) => f.name === folderName) || null;
+      } else {
+        const destRefresh = await lookupFolder(destination.accountId, destination.path, true);
+        if (destRefresh && destRefresh.subFolders) {
+          destSubFolder = destRefresh.subFolders.find((f) => f.name === folderName) || null;
+        }
       }
       if (!destSubFolder) {
-        throw new Error(`Could not create folder "${folderName}": ${createErr.message}`);
+        const errMsg = createErr && createErr.message ? createErr.message : String(createErr);
+        throw new Error(`Could not create folder "${folderName}": ${errMsg}`);
       }
       log(`   📁 Destination folder already exists: ${folderName} (merge mode)`);
     }
@@ -472,6 +488,16 @@ async function processSingleFolder(src, destination, log, broadcast) {
     }
     // Remove ghosts from our processing pipeline
     sourceMessages = sourceMessages.filter((m) => m.size > 0);
+  }
+
+  // Filter messages by max size limit
+  const maxSizeMb = currentProgress.settings ? currentProgress.settings.maxSizeMb : 25;
+  const maxSizeThreshold = maxSizeMb * 1024 * 1024;
+  const sizeExceededMessages = sourceMessages.filter((m) => m.size > maxSizeThreshold);
+  if (sizeExceededMessages.length > 0) {
+    log(`   ⚠️ Skipping ${sizeExceededMessages.length} message(s) exceeding ${maxSizeMb}MB size limit (kept in source)`);
+    stats.messagesSkippedSizeLimit += sizeExceededMessages.length;
+    sourceMessages = sourceMessages.filter((m) => m.size <= maxSizeThreshold);
   }
 
   if (sourceMessages.length === 0) {

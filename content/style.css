@@ -127,6 +127,102 @@ html, body {
   color: var(--in-content-page-color);
 }
 
+/* ─── Settings Panel ───────────────────────────────────────────────────────── */
+.settings-panel {
+  margin-bottom: 24px;
+}
+.settings-summary {
+  cursor: pointer;
+}
+details.settings-panel[open] .settings-summary .folder-toggle {
+  transform: rotate(180deg);
+}
+.settings-toolbar {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--in-content-box-border-color);
+  background: var(--in-content-page-background);
+}
+.settings-search-input {
+  width: 100%;
+  padding: 6px 12px;
+  border: 1px solid var(--in-content-box-border-color);
+  border-radius: var(--radius);
+  background-color: var(--in-content-box-background);
+  color: var(--in-content-page-color);
+  font-size: 13px;
+}
+.settings-search-input:focus {
+  border-color: var(--in-content-primary-button-background);
+  outline: none;
+}
+.settings-content {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+.settings-section-title {
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 12px;
+  color: var(--in-content-primary-button-background);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.setting-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px;
+  background: var(--in-content-page-background);
+  border: 1px solid var(--in-content-box-border-color);
+  border-radius: var(--radius);
+  transition: opacity 0.2s;
+}
+.setting-item.hidden {
+  display: none;
+}
+.setting-info {
+  flex: 1;
+  padding-right: 24px;
+}
+.setting-info label {
+  font-weight: 500;
+  font-size: 14px;
+  display: block;
+  margin-bottom: 4px;
+  cursor: pointer;
+}
+.setting-desc {
+  font-size: 12px;
+  opacity: 0.7;
+  line-height: 1.4;
+}
+.setting-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.setting-input-number {
+  width: 80px;
+  padding: 6px 8px;
+  border: 1px solid var(--in-content-box-border-color);
+  border-radius: var(--radius);
+  background-color: var(--in-content-box-background);
+  color: var(--in-content-page-color);
+  font-size: 14px;
+  text-align: right;
+}
+.setting-input-number:focus {
+  border-color: var(--in-content-primary-button-background);
+  outline: none;
+}
+.setting-unit {
+  font-size: 13px;
+  font-weight: 500;
+  opacity: 0.8;
+}
+
 /* ─── Panel Toolbar ────────────────────────────────────────────────────────── */
 .panel-toolbar {
   display: flex;

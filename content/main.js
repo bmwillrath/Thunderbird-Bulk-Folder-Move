@@ -22,6 +22,11 @@ const $progressFolder      = document.getElementById("progress-folder");
 const $progressFolderText  = document.getElementById("progress-folder-text");
 const $log            = document.getElementById("log");
 
+// ─── Settings DOM refs ────────────────────────────────────────────────────────
+const $settingMaxSize   = document.getElementById("setting-max-size");
+const $settingsSearch   = document.getElementById("settings-search");
+const $settingItems     = document.querySelectorAll(".setting-item");
+
 // ─── Toolbar Buttons ──────────────────────────────────────────────────────────
 const $btnSourceExpand   = document.getElementById("btn-source-expand");
 const $btnSourceCollapse = document.getElementById("btn-source-collapse");
@@ -40,6 +45,12 @@ let selectedDestKey = null;
   const manifest = messenger.runtime.getManifest();
   document.getElementById("app-version").textContent = "v" + manifest.version;
 
+  // Load preferences
+  const prefs = await messenger.storage.local.get({
+    maxSizeMb: 25
+  });
+  $settingMaxSize.value = prefs.maxSizeMb;
+
   const res = await messenger.runtime.sendMessage({ type: "get-accounts" });
   if (!res.ok) { alert("Failed to load accounts: " + res.error); return; }
   accounts = res.accounts;
@@ -47,6 +58,28 @@ let selectedDestKey = null;
   syncMoveButton();
   pollProgress();
 })();
+
+// ─── Settings Handlers ───────────────────────────────────────────────────────
+$settingMaxSize.addEventListener("change", async () => {
+  let val = parseInt($settingMaxSize.value, 10);
+  if (isNaN(val) || val < 1) val = 1;
+  $settingMaxSize.value = val;
+  await messenger.storage.local.set({ maxSizeMb: val });
+});
+
+$settingsSearch.addEventListener("input", () => {
+  const term = $settingsSearch.value.toLowerCase().trim();
+  $settingItems.forEach(item => {
+    const searchTokens = (item.dataset.search || "").toLowerCase();
+    const text = item.textContent.toLowerCase();
+    
+    if (term === "" || searchTokens.includes(term) || text.includes(term)) {
+      item.classList.remove("hidden");
+    } else {
+      item.classList.add("hidden");
+    }
+  });
+});
 
 // ─── Account Dropdowns ───────────────────────────────────────────────────────
 function populateAccountDropdowns() {
@@ -327,10 +360,15 @@ $btnMove.addEventListener("click", async () => {
   $sourceAccount.disabled = true;
   $destAccount.disabled = true;
 
+  const settingsPayload = {
+    maxSizeMb: parseInt($settingMaxSize.value, 10) || 25
+  };
+
   const res = await messenger.runtime.sendMessage({
     type: "start-move",
     sourceFolders: sources,
     destination,
+    settings: settingsPayload
   });
   if (!res.ok) {
     alert("Failed to start: " + res.error);
