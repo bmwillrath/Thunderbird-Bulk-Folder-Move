@@ -699,32 +699,12 @@ async function processSingleFolder(src, destination, log, broadcast) {
               }
             }
 
-            // Raw Fallback if STILL failed
+            // Message permanently failed after ramped retry
             if (!msgCopied && !skipCurrentFolderRequested) {
-              log(`   🔄 Standard copy failed or timed out. Attempting RAW import fallback for message ${msg.id}…`);
-              try {
-                const rawFile = await withTimeoutProgress(messenger.messages.getRaw(msg.id, { data_format: "File" }), msgTimeout, "messages.getRaw", log);
-                await withTimeoutProgress(messenger.messages.import(rawFile, destSubFolder), msgTimeout, "messages.import", log);
-                msgCopied = true;
-                log(`   📨 Message ${msg.id} imported via raw fallback`);
-              } catch (importErr) {
-                if (importErr.message === "Folder skipped by user") {
-                   skipCurrentFolderRequested = true;
-                } else if (importErr.message === "Message skipped by user" || skipCurrentMessageRequested) {
-                   skipCurrentMessageRequested = false;
-                } 
-                
-                if (!msgCopied && !skipCurrentFolderRequested) {
-                   if (importErr.message && importErr.message.includes("already contains")) {
-                     msgCopied = true;
-                   } else {
-                     skippedMessages++;
-                     stats.messagesFailed++;
-                     const subjInfo = msg.subject ? ` (Subject: "${msg.subject}")` : "";
-                     log(`   ❌ Permanent failure on message ${msg.id}${subjInfo}: ${importErr.message}`);
-                   }
-                }
-              }
+              skippedMessages++;
+              stats.messagesFailed++;
+              const subjInfo = msg.subject ? ` (Subject: "${msg.subject}")` : "";
+              log(`   ❌ Permanent failure on message ${msg.id}${subjInfo}: Failed after all retries.`);
             }
           }
         }
