@@ -29,6 +29,38 @@
       </div>
     </header>
 
+    <!-- Settings Panel (Scalable for future additions) -->
+    <details class="panel settings-panel">
+      <summary class="panel-header settings-summary">
+        <h2><span class="btn-icon">⚙️</span> Preferences</h2>
+        <span class="folder-toggle">▼</span>
+      </summary>
+      
+      <div class="settings-toolbar">
+        <input type="text" id="settings-search" class="settings-search-input" placeholder="Search settings...">
+      </div>
+
+      <div class="settings-content" id="settings-content">
+        <!-- Settings Section: Migration Limitations -->
+        <section class="settings-section">
+          <h3 class="settings-section-title">Migration Limitations</h3>
+          
+          <div class="setting-item" data-search="max email size filter skip large skip msg mega bytes">
+            <div class="setting-info">
+              <label for="setting-max-size">Maximum Email Size</label>
+              <div class="setting-desc">Any email larger than this thresholds will not be copied and will be skipped. Skipped emails remain in the source folder.</div>
+            </div>
+            <div class="setting-control">
+              <input type="number" id="setting-max-size" class="setting-input-number" min="1" max="999" value="25">
+              <span class="setting-unit">MB</span>
+            </div>
+          </div>
+        </section>
+        
+        <!-- Future sections will be slotted here -->
+      </div>
+    </details>
+
     <!-- Main layout: two columns -->
     <div class="columns">
       <!-- Source column -->
