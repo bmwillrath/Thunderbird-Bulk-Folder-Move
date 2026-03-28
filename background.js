@@ -417,7 +417,19 @@ async function processSingleFolder(src, destination, log, broadcast) {
   }
 
   // Collect source messages — pass real MailFolder to messages.list()
-  const sourceMessages = await collectMessages(realSrc);
+  let sourceMessages = await collectMessages(realSrc);
+
+  const ghostMessages = sourceMessages.filter((m) => !m.size || m.size === 0);
+  if (ghostMessages.length > 0) {
+    log(`   👻 Found ${ghostMessages.length} corrupted 0-byte ghost message(s). Deleting from source safely…`);
+    const ghostIds = ghostMessages.map((m) => m.id);
+    for (let i = 0; i < ghostIds.length; i += 10) {
+      const gBatch = ghostIds.slice(i, i + 10);
+      try { await deleteMessages(gBatch); } catch (_g) {}
+    }
+    // Remove ghosts from our processing pipeline
+    sourceMessages = sourceMessages.filter((m) => m.size > 0);
+  }
 
   if (sourceMessages.length === 0) {
     log(`   📧 No messages to process`);
@@ -714,10 +726,10 @@ async function processSingleFolder(src, destination, log, broadcast) {
 async function collectMessages(mailFolder) {
   const messages = [];
   let page = await withTimeout(messenger.messages.list(mailFolder), 60000, "messages.list");
-  messages.push(...page.messages.filter(m => m.size > 0));
+  messages.push(...page.messages);
   while (page.id) {
     page = await withTimeout(messenger.messages.continueList(page.id), 60000, "messages.continueList");
-    messages.push(...page.messages.filter(m => m.size > 0));
+    messages.push(...page.messages);
   }
   return messages;
 }
