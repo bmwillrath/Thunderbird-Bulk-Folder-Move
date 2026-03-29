@@ -126,6 +126,11 @@ html, body {
   background: var(--in-content-button-background);
   color: var(--in-content-page-color);
 }
+.progress-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
 
 /* ─── Settings Panel ───────────────────────────────────────────────────────── */
 .settings-panel {
