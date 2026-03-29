@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "Bulk Folder Move",
-  "version": "0.1.15",
+  "version": "0.1.16",
   "description": "Bulk move folders and their emails between Thunderbird accounts using a safe copy-then-delete queue.",
   "author": "BTE",
   "browser_specific_settings": {

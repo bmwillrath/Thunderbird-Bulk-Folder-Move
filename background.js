@@ -491,19 +491,7 @@ async function processSingleFolder(src, destination, log, broadcast) {
       log(`   ⏳ Waiting 5s for IMAP sync…`);
       await sleep(5000);
 
-      let refreshed = null;
-      if (isAcctRoot) {
-        const acct = await withTimeout(messenger.accounts.get(destination.accountId, true), 15000, "accounts.get");
-        refreshed = findDestFolder(acct.folders);
-      } else {
-        const destRefresh = await lookupFolder(destination.accountId, destination.path, true);
-        if (destRefresh) refreshed = findDestFolder(destRefresh.subFolders);
-      }
-      if (refreshed) {
-        destSubFolder = refreshed;
-      } else {
-        log(`   ⚠️ Warning: Could not refresh newly created folder reference.`);
-      }
+
     } catch (createErr) {
       // Maybe it was created between our check and now
       if (isAcctRoot) {
@@ -633,7 +621,26 @@ async function processSingleFolder(src, destination, log, broadcast) {
           log(`   ⏭️ Skipped batch by user request`);
           continue;
         } else {
-          log(`   ⚠️ Batch copy failed (${err.message}). Instant fallback to per-message…`);
+          const isTimeout = err.message && err.message.includes("Timed out");
+          if (!isTimeout) {
+            log(`   ⚠️ Batch copy failed explicitly (${err.message}). Attempting folder connection heal…`);
+            log(`   ⏳ Throttling: Waiting 10s for IMAP replication/healing…`);
+            await sleep(10000);
+            
+            log(`   🔄 Refreshing folder connection state before retry…`);
+            const destRefresh = await lookupFolder(destSubFolder.accountId, destSubFolder.path, false);
+            if (destRefresh) destSubFolder = destRefresh;
+
+            try {
+              await withTimeoutProgress(messenger.messages.copy(batchIds, destSubFolder), batchTimeout, "messages.copy batch retry", log);
+              batchCopied = true;
+              log(`   ✅ Batch copied successfully after connection heal.`);
+            } catch (retryErr) {
+              log(`   ⚠️ Batch copy retry failed (${retryErr.message}). Falling back to per-message…`);
+            }
+          } else {
+            log(`   ⚠️ Batch copy timed out. Falling back to per-message…`);
+          }
         }
       }
 
@@ -741,6 +748,10 @@ async function processSingleFolder(src, destination, log, broadcast) {
                 const waitSec = RAMP_DELAYS[r] / 1000;
                 log(`   ⏳ Throttling recovery: Waiting ${waitSec}s before retry (attempt ${r + 1}/${RAMP_DELAYS.length})…`);
                 await sleep(RAMP_DELAYS[r]);
+
+                log(`   🔄 Refreshing folder connection state…`);
+                const destRefresh = await lookupFolder(destSubFolder.accountId, destSubFolder.path, false);
+                if (destRefresh) destSubFolder = destRefresh;
 
                 try {
                   await withTimeoutProgress(messenger.messages.copy([msg.id], destSubFolder), msgTimeout, `messages.copy single retry`, log);

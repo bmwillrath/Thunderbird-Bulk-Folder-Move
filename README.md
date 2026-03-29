@@ -2,7 +2,8 @@
 
 A robust, no-nonsense Thunderbird extension to securely move entire folder trees and their emails between accounts. Designed to handle large data migrations using a safe copy-then-delete queue, ensuring zero data loss during transfer.
 
-![UI Overview Placeholder](screenshot-ui-placeholder.png)
+![UI Overview 1](screenshots/screenshot-ui-placeholder1.png)
+![UI Overview 2](screenshots/screenshot-ui-placeholder2.png)
 
 ## Compatibility
 
@@ -19,10 +20,10 @@ A robust, no-nonsense Thunderbird extension to securely move entire folder trees
 ## Screenshots
 
 *(Placeholder for Source & Destination Selection)*
-![Folder Selection](screenshot-selection-placeholder.png)
+![Folder Selection](screenshots/screenshot-selection-placeholder.png)
 
 *(Placeholder for Active Progress Tracker)*
-![Progress Tracker](screenshot-progress-placeholder.png)
+![Progress Tracker](screenshots/screenshot-progress-placeholder.png)
 
 ## Installation
 
