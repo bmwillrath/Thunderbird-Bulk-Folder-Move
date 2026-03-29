@@ -490,6 +490,20 @@ async function processSingleFolder(src, destination, log, broadcast) {
       log(`   📁 Created destination folder: ${folderName}`);
       log(`   ⏳ Waiting 5s for IMAP sync…`);
       await sleep(5000);
+
+      let refreshed = null;
+      if (isAcctRoot) {
+        const acct = await withTimeout(messenger.accounts.get(destination.accountId, true), 15000, "accounts.get");
+        refreshed = findDestFolder(acct.folders);
+      } else {
+        const destRefresh = await lookupFolder(destination.accountId, destination.path, true);
+        if (destRefresh) refreshed = findDestFolder(destRefresh.subFolders);
+      }
+      if (refreshed) {
+        destSubFolder = refreshed;
+      } else {
+        log(`   ⚠️ Warning: Could not refresh newly created folder reference.`);
+      }
     } catch (createErr) {
       // Maybe it was created between our check and now
       if (isAcctRoot) {
