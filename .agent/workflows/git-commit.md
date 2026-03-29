@@ -13,9 +13,9 @@ When the user asks me to "git commit" or run a "git commit workflow", I must fol
 Example commands: 
 ```bash
 # Use multiple -m flags to create a title and a detailed multi-line description
-git commit -am "v0.X.X: Short title of the update" -m "Detailed description line 1
-Detailed description line 2
-Detailed description line 3"
+git commit -am "v0.X.X: Short title of the update" -m "- Detailed description line 1
+- Detailed description line 2
+- Detailed description line 3"
 
 zip -r "../bulk-folder-move-v0.X.X.xpi" * -x "*.git*" "*.xpi"
 ```
