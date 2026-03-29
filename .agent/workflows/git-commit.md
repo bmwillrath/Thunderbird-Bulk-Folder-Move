@@ -8,7 +8,7 @@ When the user asks me to "git commit" or run a "git commit workflow", I must fol
 2. **Git Commit:** Stage changes and write a descriptive, multi-line commit message summarizing features/fixes.
 3. **Zip to Parent Directory:** Use the `zip` command to bundle the extension into an `.xpi` file, making absolutely sure the output path is set to the PARENT directory (`../`). 
    - **Important:** Ensure the archive name includes the version number (e.g. `../bulk-folder-move-v0.2.0.xpi`).
-   - Exclude the `.git` directory and any existing `.xpi` files.
+   - Exclude the `.git` directory, any existing `.xpi` files, logs, screenshots, and documentation (`README.md`, `ARCHITECTURE.md`, `.agent/*`).
    
 Example commands: 
 ```bash
@@ -17,5 +17,5 @@ git commit -am "v0.X.X: Short title of the update" -m "- Detailed description li
 - Detailed description line 2
 - Detailed description line 3"
 
-zip -r "../bulk-folder-move-v0.X.X.xpi" * -x "*.git*" "*.xpi"
+zip -r "../bulk-folder-move-v0.X.X.xpi" * -x "*.git*" "*.xpi" "*.moz_log" "*.log" "screenshots/*" "README.md" "ARCHITECTURE.md" ".agent/*" ".gitignore"
 ```
