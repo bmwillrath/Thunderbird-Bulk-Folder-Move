@@ -455,12 +455,55 @@ async function processSingleFolder(src, destination, log, broadcast) {
 
   function findDestFolder(subFolders) {
     if (!subFolders) return null;
+    let found = null;
     
-    // 1. Strict match
-    let found = subFolders.find((f) => f.name === folderName);
+    // 1. Native Type Mapping
+    if (realSrc.type) {
+      found = subFolders.find((f) => f.type === realSrc.type);
+      if (found) {
+        log(`   ✅ Type match: Source type "${realSrc.type}" locked to destination "${found.name}"`);
+        return found;
+      }
+    }
+
+    // 2. Strict match
+    found = subFolders.find((f) => f.name === folderName);
     if (found) return found;
 
-    // 2. Fuzzy match
+    // 3. Advanced System Fallback (For Shared Mailboxes & M365 Aliases)
+    const sysType = realSrc.type || (
+      ["inbox", "sent", "drafts", "trash", "deleted items", "junk", "junk email", "templates", "archives"].includes(fuzzyTarget) ? fuzzyTarget : null
+    );
+
+    if (sysType) {
+      const isSent = sysType === "sent" || fuzzyTarget === "sent";
+      const isDrafts = sysType === "drafts" || fuzzyTarget === "drafts";
+      const isTrash = sysType === "trash" || fuzzyTarget === "trash" || fuzzyTarget === "deleted items";
+      const isJunk = sysType === "junk" || fuzzyTarget === "junk" || fuzzyTarget === "junk email";
+      
+      if (isSent) {
+        found = subFolders.find(f => {
+          const lower = f.name.toLowerCase();
+          return lower === "sent items" || lower.startsWith("sent-") || lower === "gesendete elemente";
+        });
+      } else if (isDrafts) {
+        found = subFolders.find(f => f.name.toLowerCase().startsWith("drafts-"));
+      } else if (isTrash) {
+        found = subFolders.find(f => {
+          const lower = f.name.toLowerCase();
+          return lower === "deleted items" || lower.startsWith("trash-") || lower.startsWith("deleted-");
+        });
+      } else if (isJunk) {
+         found = subFolders.find(f => f.name.toLowerCase() === "junk email" || f.name.toLowerCase().startsWith("junk-"));
+      }
+      
+      if (found) {
+        log(`   🛡️ System Fallback: Mapped system folder "${rawFolderName}" to Exchange entity "${found.name}"`);
+        return found;
+      }
+    }
+
+    // 4. Fuzzy match (User Project Folders)
     const enableFuzzy = currentProgress.settings ? currentProgress.settings.enableFuzzyMatching !== false : true;
     if (enableFuzzy) {
       found = subFolders.find((f) => f.name.replace(/[<>:"/\\|?*]/g, '-').trim().toLowerCase() === fuzzyTarget);
