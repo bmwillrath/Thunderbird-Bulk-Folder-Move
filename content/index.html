@@ -57,7 +57,46 @@
           </div>
         </section>
         
-        <!-- Future sections will be slotted here -->
+        <!-- Settings Section: Folder Matching Rules -->
+        <section class="settings-section">
+          <h3 class="settings-section-title">Folder Matching Rules</h3>
+          
+          <div class="setting-item" data-search="fuzzy match ignore space case existing folder merge">
+            <div class="setting-info">
+              <label for="setting-fuzzy-match">Enable Fuzzy Matching</label>
+              <div class="setting-desc">Ignore exact spacing and casing when looking for an existing destination folder to merge into. Recommended if an older version of the folder might already exist.</div>
+            </div>
+            <div class="setting-control">
+              <input type="checkbox" id="setting-fuzzy-match" class="setting-checkbox" checked>
+            </div>
+          </div>
+        </section>
+
+        <!-- Settings Section: Log History -->
+        <section class="settings-section">
+          <h3 class="settings-section-title">Log History</h3>
+          
+          <div class="setting-item" data-search="master log history keep aggregate">
+            <div class="setting-info">
+              <label for="setting-keep-master-log">Keep Master Log</label>
+              <div class="setting-desc">Automatically pool all session logs into a persistent internal database so you can download a full history of all transfers.</div>
+            </div>
+            <div class="setting-control">
+              <input type="checkbox" id="setting-keep-master-log" class="setting-checkbox" checked>
+            </div>
+          </div>
+
+          <div class="setting-item" data-search="download export master log save clear bloat size">
+            <div class="setting-info">
+              <label>Master Log Storage</label>
+              <div class="setting-desc">Current aggregated log size: <strong id="master-log-size">0 KB</strong></div>
+            </div>
+            <div class="setting-control">
+              <button id="btn-download-master-log" class="btn-sm btn-primary" title="Download entire log history">Download</button>
+              <button id="btn-clear-master-log" class="btn-sm btn-danger" title="Clear log database">Clear</button>
+            </div>
+          </div>
+        </section>
       </div>
     </details>
 
@@ -126,7 +165,10 @@
     <section class="panel progress-panel" id="progress-panel" style="display:none;">
       <div class="panel-header">
         <h2>Progress</h2>
-        <span class="badge" id="progress-badge">Idle</span>
+        <div class="progress-actions">
+          <button id="btn-save-log" class="btn-sm btn-primary" style="display:none;" title="Save session log">💾 Save Log</button>
+          <span class="badge" id="progress-badge">Idle</span>
+        </div>
       </div>
       <div class="progress-bars">
         <div class="progress-row">

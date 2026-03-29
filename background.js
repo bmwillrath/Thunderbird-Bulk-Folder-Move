@@ -349,6 +349,19 @@ async function processQueue(sourceFolders, destination) {
     broadcast();
   } finally {
     isProcessing = false;
+    
+    // Append to Master Log
+    const enableMaster = currentProgress.settings ? currentProgress.settings.keepMasterLog : true;
+    const isActuallyFinished = currentProgress.phase === "done" || currentProgress.phase === "cancelled" || currentProgress.phase === "error";
+    if (enableMaster && currentProgress.log.length > 0 && isActuallyFinished) {
+      try {
+        const res = await messenger.storage.local.get({ masterLog: "" });
+        const dateStr = new Date().toLocaleString();
+        const divider = res.masterLog ? `\n\n========== MIGRATION SESSION: ${dateStr} ==========\n\n` : `========== MIGRATION SESSION: ${dateStr} ==========\n\n`;
+        const newLogEntry = currentProgress.log.join("\n");
+        await messenger.storage.local.set({ masterLog: res.masterLog + divider + newLogEntry });
+      } catch (_e) {}
+    }
   }
 }
 
@@ -429,23 +442,44 @@ async function processSingleFolder(src, destination, log, broadcast) {
   log(`   🔄 Using merge-copy mode…`);
 
   let folderName = realSrc.name;
+  const rawFolderName = folderName;
 
   // Sanitize illegal characters for Exchange Online / IMAP
   // Exchange forbids: < > : " / \ | ? *
   folderName = folderName.replace(/[<>:"/\\|?*]/g, '-').trim();
+  
+  const fuzzyTarget = folderName.toLowerCase();
+
   // Find or create destination sub-folder
   let destSubFolder = null;
+
+  function findDestFolder(subFolders) {
+    if (!subFolders) return null;
+    
+    // 1. Strict match
+    let found = subFolders.find((f) => f.name === folderName);
+    if (found) return found;
+
+    // 2. Fuzzy match
+    const enableFuzzy = currentProgress.settings ? currentProgress.settings.enableFuzzyMatching !== false : true;
+    if (enableFuzzy) {
+      found = subFolders.find((f) => f.name.replace(/[<>:"/\\|?*]/g, '-').trim().toLowerCase() === fuzzyTarget);
+      if (found) {
+        log(`   ⚠️ Fuzzy match: Source folder "${rawFolderName}" merged into existing destination "${found.name}"`);
+        return found;
+      }
+    }
+    return null;
+  }
 
   // Check if destination sub-folder exists
   if (isAcctRoot) {
     const acct = await withTimeout(messenger.accounts.get(destination.accountId, true), 15000, "accounts.get");
-    destSubFolder = (acct.folders || []).find((f) => f.name === folderName) || null;
+    destSubFolder = findDestFolder(acct.folders);
   } else {
     // Re-fetch dest with subFolders
     const destRefresh = await lookupFolder(destination.accountId, destination.path, true);
-    if (destRefresh && destRefresh.subFolders) {
-      destSubFolder = destRefresh.subFolders.find((f) => f.name === folderName) || null;
-    }
+    if (destRefresh) destSubFolder = findDestFolder(destRefresh.subFolders);
   }
 
   if (destSubFolder) {
@@ -771,21 +805,27 @@ async function processSingleFolder(src, destination, log, broadcast) {
     for (const sub of srcRefresh.subFolders) {
       if (shouldCancel) return;
       log(`   ↳ Processing sub-folder: ${sub.name}`);
-      await processSingleFolder(
-        {
-          key: folderKey(sub),
-          name: sub.name,
-          path: sub.path,
-          accountId: sub.accountId || src.accountId,
-        },
-        {
-          key: folderKey(destSubFolder),
-          name: destSubFolder.name,
-          path: destSubFolder.path,
-          accountId: destSubFolder.accountId || destination.accountId,
-        },
-        log, broadcast
-      );
+      try {
+        await processSingleFolder(
+          {
+            key: folderKey(sub),
+            name: sub.name,
+            path: sub.path,
+            accountId: sub.accountId || src.accountId,
+          },
+          {
+            key: folderKey(destSubFolder),
+            name: destSubFolder.name,
+            path: destSubFolder.path,
+            accountId: destSubFolder.accountId || destination.accountId,
+          },
+          log, broadcast
+        );
+      } catch (subErr) {
+        stats.foldersFailed++;
+        const msg = subErr && subErr.message ? subErr.message : String(subErr);
+        log(`   ❌ Error processing sub-folder "${sub.name}": ${msg}`);
+      }
     }
   }
 

@@ -26,6 +26,12 @@ const $log            = document.getElementById("log");
 const $settingMaxSize   = document.getElementById("setting-max-size");
 const $settingsSearch   = document.getElementById("settings-search");
 const $settingItems     = document.querySelectorAll(".setting-item");
+const $settingFuzzyMatch = document.getElementById("setting-fuzzy-match");
+const $settingKeepMasterLog = document.getElementById("setting-keep-master-log");
+const $btnDownloadMasterLog = document.getElementById("btn-download-master-log");
+const $btnClearMasterLog = document.getElementById("btn-clear-master-log");
+const $masterLogSize    = document.getElementById("master-log-size");
+const $btnSaveLog       = document.getElementById("btn-save-log");
 
 // ─── Toolbar Buttons ──────────────────────────────────────────────────────────
 const $btnSourceExpand   = document.getElementById("btn-source-expand");
@@ -47,9 +53,14 @@ let selectedDestKey = null;
 
   // Load preferences
   const prefs = await messenger.storage.local.get({
-    maxSizeMb: 25
+    maxSizeMb: 25,
+    enableFuzzyMatching: true,
+    keepMasterLog: true
   });
   $settingMaxSize.value = prefs.maxSizeMb;
+  if ($settingFuzzyMatch) $settingFuzzyMatch.checked = prefs.enableFuzzyMatching;
+  if ($settingKeepMasterLog) $settingKeepMasterLog.checked = prefs.keepMasterLog;
+  updateMasterLogSize();
 
   const res = await messenger.runtime.sendMessage({ type: "get-accounts" });
   if (!res.ok) { alert("Failed to load accounts: " + res.error); return; }
@@ -66,6 +77,75 @@ $settingMaxSize.addEventListener("change", async () => {
   $settingMaxSize.value = val;
   await messenger.storage.local.set({ maxSizeMb: val });
 });
+
+if ($settingFuzzyMatch) {
+  $settingFuzzyMatch.addEventListener("change", async () => {
+    await messenger.storage.local.set({ enableFuzzyMatching: $settingFuzzyMatch.checked });
+  });
+}
+
+if ($settingKeepMasterLog) {
+  $settingKeepMasterLog.addEventListener("change", async () => {
+    await messenger.storage.local.set({ keepMasterLog: $settingKeepMasterLog.checked });
+  });
+}
+
+function updateMasterLogSize() {
+  messenger.storage.local.get({ masterLog: "" }).then(res => {
+    const bytes = new Blob([res.masterLog]).size;
+    let sizeStr = bytes + " B";
+    if (bytes > 1024 * 1024) sizeStr = (bytes / (1024 * 1024)).toFixed(2) + " MB";
+    else if (bytes > 1024) sizeStr = (bytes / 1024).toFixed(2) + " KB";
+    if ($masterLogSize) $masterLogSize.textContent = sizeStr;
+  });
+}
+
+if ($btnClearMasterLog) {
+  $btnClearMasterLog.addEventListener("click", async () => {
+    if (confirm("Are you sure you want to clear the master log history?")) {
+      await messenger.storage.local.set({ masterLog: "" });
+      updateMasterLogSize();
+    }
+  });
+}
+
+if ($btnDownloadMasterLog) {
+  $btnDownloadMasterLog.addEventListener("click", async () => {
+    const res = await messenger.storage.local.get({ masterLog: "No master log history found." });
+    downloadTextFile("master-migration-log.txt", res.masterLog);
+  });
+}
+
+if ($btnSaveLog) {
+  $btnSaveLog.addEventListener("click", () => {
+    const logText = $log.textContent;
+    downloadTextFile(`migration-log-${new Date().toISOString().slice(0, 10)}.txt`, logText);
+  });
+}
+
+function downloadTextFile(filename, text) {
+  const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  
+  if (messenger.downloads && messenger.downloads.download) {
+    messenger.downloads.download({
+      url: url,
+      filename: filename,
+      saveAs: true
+    }).finally(() => {
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
+    });
+  } else {
+    // Fallback if downloads API is restricted
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+}
 
 $settingsSearch.addEventListener("input", () => {
   const term = $settingsSearch.value.toLowerCase().trim();
@@ -361,7 +441,9 @@ $btnMove.addEventListener("click", async () => {
   $destAccount.disabled = true;
 
   const settingsPayload = {
-    maxSizeMb: parseInt($settingMaxSize.value, 10) || 25
+    maxSizeMb: parseInt($settingMaxSize.value, 10) || 25,
+    enableFuzzyMatching: $settingFuzzyMatch ? $settingFuzzyMatch.checked : true,
+    keepMasterLog: $settingKeepMasterLog ? $settingKeepMasterLog.checked : true
   };
 
   const res = await messenger.runtime.sendMessage({
@@ -421,9 +503,13 @@ function updateProgress(p) {
   $log.parentElement.scrollTop = $log.parentElement.scrollHeight;
 
   if (p.phase === "done" || p.phase === "cancelled" || p.phase === "error") {
+    $btnSaveLog.style.display = "inline-flex";
     resetUI();
     if ($sourceAccount.value) loadFolderTree($sourceAccount.value, "source");
     if ($destAccount.value) loadFolderTree($destAccount.value, "dest");
+    updateMasterLogSize();
+  } else {
+    $btnSaveLog.style.display = "none";
   }
 }
 
