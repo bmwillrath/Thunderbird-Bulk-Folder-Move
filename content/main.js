@@ -24,6 +24,7 @@ const $log            = document.getElementById("log");
 
 // ─── Settings DOM refs ────────────────────────────────────────────────────────
 const $settingMaxSize   = document.getElementById("setting-max-size");
+const $settingTransferMode = document.getElementById("setting-transfer-mode");
 const $settingsSearch   = document.getElementById("settings-search");
 const $settingItems     = document.querySelectorAll(".setting-item");
 const $settingFuzzyMatch = document.getElementById("setting-fuzzy-match");
@@ -55,11 +56,16 @@ let selectedDestKey = null;
   const prefs = await messenger.storage.local.get({
     maxSizeMb: 25,
     enableFuzzyMatching: true,
-    keepMasterLog: true
+    keepMasterLog: true,
+    transferMode: "move"
   });
   $settingMaxSize.value = prefs.maxSizeMb;
   if ($settingFuzzyMatch) $settingFuzzyMatch.checked = prefs.enableFuzzyMatching;
   if ($settingKeepMasterLog) $settingKeepMasterLog.checked = prefs.keepMasterLog;
+  if ($settingTransferMode) {
+    $settingTransferMode.value = prefs.transferMode;
+    updateTransferModeUI(prefs.transferMode);
+  }
   updateMasterLogSize();
 
   const res = await messenger.runtime.sendMessage({ type: "get-accounts" });
@@ -88,6 +94,20 @@ if ($settingKeepMasterLog) {
   $settingKeepMasterLog.addEventListener("change", async () => {
     await messenger.storage.local.set({ keepMasterLog: $settingKeepMasterLog.checked });
   });
+}
+
+if ($settingTransferMode) {
+  $settingTransferMode.addEventListener("change", async () => {
+    const val = $settingTransferMode.value;
+    await messenger.storage.local.set({ transferMode: val });
+    updateTransferModeUI(val);
+  });
+}
+
+function updateTransferModeUI(mode) {
+  const isCopy = mode === "copy";
+  const actionText = isCopy ? "Copy Selected Folders" : "Move Selected Folders";
+  $btnMove.innerHTML = `<span class="btn-icon">▶</span> ${actionText}`;
 }
 
 function updateMasterLogSize() {
@@ -427,7 +447,12 @@ $btnMove.addEventListener("click", async () => {
   };
 
   // Confirm
-  const confirmMsg = `Move ${sources.length} folder(s) to "${destFolder ? destFolder.name : "selected destination"}"?\n\nThis will copy all messages, then delete the originals.`;
+  const isCopy = $settingTransferMode && $settingTransferMode.value === "copy";
+  const actionVerb = isCopy ? "Copy" : "Move";
+  const actionDetails = isCopy
+    ? "This will copy all messages and keep the original emails and folders intact."
+    : "This will copy all messages, then delete the originals.";
+  const confirmMsg = `${actionVerb} ${sources.length} folder(s) to "${destFolder ? destFolder.name : "selected destination"}"?\n\n${actionDetails}`;
   if (!confirm(confirmMsg)) return;
 
   // Disable UI
@@ -443,7 +468,8 @@ $btnMove.addEventListener("click", async () => {
   const settingsPayload = {
     maxSizeMb: parseInt($settingMaxSize.value, 10) || 25,
     enableFuzzyMatching: $settingFuzzyMatch ? $settingFuzzyMatch.checked : true,
-    keepMasterLog: $settingKeepMasterLog ? $settingKeepMasterLog.checked : true
+    keepMasterLog: $settingKeepMasterLog ? $settingKeepMasterLog.checked : true,
+    transferMode: $settingTransferMode ? $settingTransferMode.value : "move"
   };
 
   const res = await messenger.runtime.sendMessage({

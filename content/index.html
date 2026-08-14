@@ -41,6 +41,24 @@
       </div>
 
       <div class="settings-content" id="settings-content">
+        <!-- Settings Section: Transfer Mode -->
+        <section class="settings-section">
+          <h3 class="settings-section-title">Transfer Mode</h3>
+          
+          <div class="setting-item" data-search="transfer mode copy move remove delete keep original">
+            <div class="setting-info">
+              <label for="setting-transfer-mode">Operation Mode</label>
+              <div class="setting-desc">Choose whether to move emails (copy then delete source) or copy emails (keep source messages and folders untouched).</div>
+            </div>
+            <div class="setting-control">
+              <select id="setting-transfer-mode" class="setting-input-number" style="width: auto; padding: 4px 8px; font-size: 13px;">
+                <option value="move">Move (Copy &amp; Delete Source)</option>
+                <option value="copy">Copy Only (Keep Source Untouched)</option>
+              </select>
+            </div>
+          </div>
+        </section>
+
         <!-- Settings Section: Migration Limitations -->
         <section class="settings-section">
           <h3 class="settings-section-title">Migration Limitations</h3>

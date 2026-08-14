@@ -397,9 +397,12 @@ async function processSingleFolder(src, destination, log, broadcast) {
     if (!realDest) throw new Error(`Destination folder not found: ${destination.path}`);
   }
 
-  // ── Strategy 1: Native folders.move() (same account only) ────────────
+  const transferMode = currentProgress.settings && currentProgress.settings.transferMode === "copy" ? "copy" : "move";
+  const isMoveMode = transferMode === "move";
+
+  // ── Strategy 1: Native folders.move() (same account only, Move mode only) ────
   const sameAccount = src.accountId === destination.accountId;
-  if (sameAccount) {
+  if (sameAccount && isMoveMode) {
     log(`   🚀 Attempting native folder move…`);
     try {
       const movedFolder = await withTimeout(messenger.folders.move(realSrc, realDest), 120000, "folders.move");
@@ -559,11 +562,15 @@ async function processSingleFolder(src, destination, log, broadcast) {
 
   const ghostMessages = sourceMessages.filter((m) => !m.size || m.size === 0);
   if (ghostMessages.length > 0) {
-    log(`   👻 Found ${ghostMessages.length} corrupted 0-byte ghost message(s). Deleting from source safely…`);
-    const ghostIds = ghostMessages.map((m) => m.id);
-    for (let i = 0; i < ghostIds.length; i += 10) {
-      const gBatch = ghostIds.slice(i, i + 10);
-      try { await deleteMessages(gBatch); } catch (_g) { }
+    if (isMoveMode) {
+      log(`   👻 Found ${ghostMessages.length} corrupted 0-byte ghost message(s). Deleting from source safely…`);
+      const ghostIds = ghostMessages.map((m) => m.id);
+      for (let i = 0; i < ghostIds.length; i += 10) {
+        const gBatch = ghostIds.slice(i, i + 10);
+        try { await deleteMessages(gBatch); } catch (_g) { }
+      }
+    } else {
+      log(`   👻 Found ${ghostMessages.length} corrupted 0-byte ghost message(s). Skipping (kept in source in Copy mode)…`);
     }
     // Remove ghosts from our processing pipeline
     sourceMessages = sourceMessages.filter((m) => m.size > 0);
@@ -594,22 +601,26 @@ async function processSingleFolder(src, destination, log, broadcast) {
       (m) => destMessageIds.has(m.headerMessageId)
     );
 
-    // Delete duplicates from source
+    // Delete duplicates from source (Move mode only)
     if (dupeMessages.length > 0) {
-      log(`   🧹 Deleting ${dupeMessages.length} duplicate(s) from source…`);
-      const dupeIds = dupeMessages.map((m) => m.id);
-      for (let i = 0; i < dupeIds.length; i += 10) {
-        const batch = dupeIds.slice(i, i + 10);
-        try {
-          await deleteMessages(batch);
-        } catch (_e) {
-          for (const id of batch) {
-            try { await deleteMessages([id]); } catch (_e2) { }
+      if (isMoveMode) {
+        log(`   🧹 Deleting ${dupeMessages.length} duplicate(s) from source…`);
+        const dupeIds = dupeMessages.map((m) => m.id);
+        for (let i = 0; i < dupeIds.length; i += 10) {
+          const batch = dupeIds.slice(i, i + 10);
+          try {
+            await deleteMessages(batch);
+          } catch (_e) {
+            for (const id of batch) {
+              try { await deleteMessages([id]); } catch (_e2) { }
+            }
           }
         }
+        stats.messagesDuplicatesRemoved += dupeMessages.length;
+        log(`   ✅ Removed ${dupeMessages.length} duplicate(s) from source`);
+      } else {
+        log(`   ℹ️ Found ${dupeMessages.length} duplicate(s) already in destination. Skipping copy (kept in source in Copy mode).`);
       }
-      stats.messagesDuplicatesRemoved += dupeMessages.length;
-      log(`   ✅ Removed ${dupeMessages.length} duplicate(s) from source`);
     }
 
     const totalNew = newMessages.length;
@@ -690,18 +701,20 @@ async function processSingleFolder(src, destination, log, broadcast) {
       if (skipCurrentFolderRequested) break;
 
       if (batchCopied) {
-        try {
-          await deleteMessages(batchIds);
-        } catch (delErr) {
-          log(`   ⚠️ Batch delete failed, trying individually: ${delErr.message}`);
-          for (const id of batchIds) {
-            try { await deleteMessages([id]); } catch (_e) { }
+        if (isMoveMode) {
+          try {
+            await deleteMessages(batchIds);
+          } catch (delErr) {
+            log(`   ⚠️ Batch delete failed, trying individually: ${delErr.message}`);
+            for (const id of batchIds) {
+              try { await deleteMessages([id]); } catch (_e) { }
+            }
           }
         }
         copiedMessages += batch.length;
         stats.messagesCopied += batch.length;
         currentProgress.copied = copiedMessages;
-        log(`   📋 Copied ${copiedMessages}/${totalNew} message(s)`);
+        log(`   📋 ${isMoveMode ? "Moved" : "Copied"} ${copiedMessages}/${totalNew} message(s)`);
         broadcast();
         continue;
       }
@@ -717,7 +730,9 @@ async function processSingleFolder(src, destination, log, broadcast) {
         if (msg.headerMessageId && arrivedIds.has(msg.headerMessageId)) {
           // Phantom copy: arrived despite timeout
           phantomCount++;
-          try { await deleteMessages([msg.id]); } catch (_e) { }
+          if (isMoveMode) {
+            try { await deleteMessages([msg.id]); } catch (_e) { }
+          }
           copiedMessages++;
           stats.messagesCopied++;
         } else {
@@ -725,7 +740,7 @@ async function processSingleFolder(src, destination, log, broadcast) {
         }
       }
       if (phantomCount > 0) {
-        log(`   📋 ${phantomCount} message(s) arrived despite timeout — cleaned from source`);
+        log(`   📋 ${phantomCount} message(s) arrived despite timeout — ${isMoveMode ? "cleaned from source" : "recorded"}`);
         currentProgress.copied = copiedMessages;
         broadcast();
       }
@@ -836,9 +851,11 @@ async function processSingleFolder(src, destination, log, broadcast) {
         }
 
         if (msgCopied) {
-          try {
-            await deleteMessages([msg.id]);
-          } catch (_e) { }
+          if (isMoveMode) {
+            try {
+              await deleteMessages([msg.id]);
+            } catch (_e) { }
+          }
           copiedMessages++;
           stats.messagesCopied++;
           currentProgress.copied = copiedMessages;
@@ -847,7 +864,7 @@ async function processSingleFolder(src, destination, log, broadcast) {
         await sleep(200);
       }
 
-      log(`   📋 Copied ${copiedMessages}/${totalNew} message(s)`);
+      log(`   📋 ${isMoveMode ? "Moved" : "Copied"} ${copiedMessages}/${totalNew} message(s)`);
       broadcast();
     }
 
@@ -897,7 +914,13 @@ async function processSingleFolder(src, destination, log, broadcast) {
     }
   }
 
-  // Delete source folder if empty and has no sub-folders
+  // Delete source folder if in Move mode, empty, and has no sub-folders
+  if (!isMoveMode) {
+    log(`   ℹ️ Source folder "${folderName}" kept intact (Copy mode).`);
+    stats.foldersKept++;
+    return;
+  }
+
   const srcRecheck = await lookupFolder(src.accountId, src.path, true);
   if (!srcRecheck) {
     // Already gone
