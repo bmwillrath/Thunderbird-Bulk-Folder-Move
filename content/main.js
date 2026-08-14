@@ -46,6 +46,7 @@ let sourceFolders = [];   // flat list with .key, .parentKey, .depth etc.
 let selectedSourceKeys = new Set();
 let destFolders = [];
 let selectedDestKey = null;
+let currentCountSession = { source: 0, dest: 0 };
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
 (async () => {
@@ -230,6 +231,7 @@ async function loadFolderTree(accountId, side) {
   }
 
   renderTree(side === "source" ? sourceFolders : destFolders, container, side);
+  startBackgroundCountQueue(side === "source" ? sourceFolders : destFolders, side);
 }
 
 function folderIcon(type) {
@@ -336,6 +338,13 @@ function renderTree(folders, container, side) {
       name.title = f.path;
       row.appendChild(name);
 
+      if (f.type !== "root") {
+        const badge = document.createElement("span");
+        badge.className = "msg-count-badge";
+        badge.dataset.key = f.key;
+        row.appendChild(badge);
+      }
+
       folderWrapper.appendChild(row);
       targetContainer.appendChild(folderWrapper);
 
@@ -371,6 +380,43 @@ function renderTree(folders, container, side) {
   }
 
   buildDOM(null, container);
+}
+
+async function startBackgroundCountQueue(folders, side) {
+  const sessionId = ++currentCountSession[side];
+  const container = side === "source" ? $sourceTree : $destTree;
+
+  for (const f of folders) {
+    if (currentCountSession[side] !== sessionId) break;
+    if (f.type === "root") continue;
+
+    const badgeEl = container.querySelector(`.msg-count-badge[data-key="${CSS.escape(f.key)}"]`);
+    if (!badgeEl) continue;
+
+    try {
+      const res = await messenger.runtime.sendMessage({
+        type: "get-folder-count",
+        accountId: f.accountId,
+        path: f.path,
+      });
+
+      if (currentCountSession[side] !== sessionId) break;
+
+      if (res && res.ok && typeof res.count === "number") {
+        badgeEl.textContent = `[${res.count}]`;
+        badgeEl.title = `${res.count} email(s)`;
+      } else {
+        badgeEl.textContent = `[?]`;
+        badgeEl.title = "Could not read message count";
+      }
+    } catch (_err) {
+      if (currentCountSession[side] !== sessionId) break;
+      badgeEl.textContent = `[?]`;
+    }
+
+    // 150ms throttle delay between folders to ensure zero UI lag & zero server flooding
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
 }
 
 // ─── Select All / None ───────────────────────────────────────────────────────

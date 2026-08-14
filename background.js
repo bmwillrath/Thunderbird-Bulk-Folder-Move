@@ -185,6 +185,8 @@ messenger.runtime.onMessage.addListener(async (message, _sender) => {
       return { ok: true };
     case "get-progress":
       return { ok: true, progress: currentProgress, processing: isProcessing };
+    case "get-folder-count":
+      return handleGetFolderCount(message.accountId, message.path);
     default:
       return { ok: false, error: "Unknown message type" };
   }
@@ -228,6 +230,17 @@ async function handleGetFolders(accountId) {
     };
     walk(account.folders || [], 0, null);
     return { ok: true, folders: flatFolders };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+}
+
+async function handleGetFolderCount(accountId, path) {
+  try {
+    const realFolder = await lookupFolder(accountId, path, true);
+    if (!realFolder) return { ok: false, error: "Folder not found" };
+    const count = await countMessages(realFolder);
+    return { ok: true, count };
   } catch (err) {
     return { ok: false, error: err.message };
   }
